@@ -22,7 +22,7 @@ func spawnUpdater(u *Updater, mode Mode, targetVersion string) error {
 	shellCmd := buildUnixUpdateCmd(u, targetVersion)
 
 	if mode == ModeSystemd && hasExec("systemd-run") {
-		args := []string{"--collect", "--unit", "frpsmgrd-selfupdate", "/bin/sh", "-c", shellCmd}
+		args := []string{"--collect", "--unit", "cfdmgrd-selfupdate", "/bin/sh", "-c", shellCmd}
 		out, err := exec.Command("systemd-run", args...).CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("systemd-run failed: %v: %s", err, strings.TrimSpace(string(out)))

@@ -34,7 +34,7 @@ func DetectDeployment() Mode {
 		// surfaced via update.log.
 		return ModeWindowsService
 	case "darwin":
-		if fileExists("/Library/LaunchDaemons/com.miaclark.frpsmgrd.plist") {
+		if fileExists("/Library/LaunchDaemons/com.miaclark.cfdmgrd.plist") {
 			return ModeLaunchd
 		}
 		return ModeManual
@@ -56,7 +56,7 @@ func CanSelfUpdate(mode Mode) (bool, string) {
 	case ModeDocker:
 		return false, "Docker 部署无法在容器内自我更新，请在宿主机执行：docker compose pull && docker compose up -d"
 	case ModeManual:
-		return false, "未检测到系统服务（疑似手动运行），无法自动替换二进制并重启；请用安装脚本装成服务后再用一键更新，或改用命令行 fms update"
+		return false, "未检测到系统服务（疑似手动运行），无法自动替换二进制并重启；请用安装脚本装成服务后再用一键更新，或改用命令行 cfm update"
 	default:
 		return true, ""
 	}

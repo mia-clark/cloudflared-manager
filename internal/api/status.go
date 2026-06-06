@@ -3,7 +3,7 @@ package api
 import (
 	"net/http"
 
-	"github.com/mia-clark/frps-manager/internal/manager"
+	"github.com/mia-clark/cloudflared-manager/internal/manager"
 )
 
 // StatusHandler serves /api/v1/configs/{id}/status.

@@ -8,11 +8,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/mia-clark/frps-manager/internal/api/middleware"
-	"github.com/mia-clark/frps-manager/internal/appcfg"
-	"github.com/mia-clark/frps-manager/internal/manager"
-	"github.com/mia-clark/frps-manager/internal/metrics"
-	"github.com/mia-clark/frps-manager/web"
+	"github.com/mia-clark/cloudflared-manager/internal/api/middleware"
+	"github.com/mia-clark/cloudflared-manager/internal/appcfg"
+	"github.com/mia-clark/cloudflared-manager/internal/manager"
+	"github.com/mia-clark/cloudflared-manager/internal/metrics"
+	"github.com/mia-clark/cloudflared-manager/web"
 )
 
 // Deps bundles the collaborators that handlers need.

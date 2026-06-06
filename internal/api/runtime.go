@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/mia-clark/frps-manager/internal/manager"
+	"github.com/mia-clark/cloudflared-manager/internal/manager"
 )
 
 // RuntimeHandler serves the read-only /api/v1/runtime/{id}/* endpoints. For

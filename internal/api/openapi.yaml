@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
-  title: frpsmgrd API (frps 服务端管理器)
+  title: cfdmgrd API (cloudflared 多实例管理器)
   description: |
-    无头 frps 服务端管理器（headless frps manager）。守护进程 `frpsmgrd` 把
+    无头 cloudflared 多实例管理器（headless cloudflared manager）。守护进程 `cfdmgrd` 把
     每个 frps 实例放进**独立的子进程**（`frps-worker`，re-exec 自身），通过
     HTTP/JSON 暴露 CRUD、生命周期、运行时监控、历史流量、告警、日志、导入导出、
     系统监控等管理面。
@@ -19,7 +19,7 @@ info:
     - **reload = 重启**：frps 服务端参数（bindPort/vhost*/auth/tls 等）没有
       in-place 热重载语义，本守护进程对 `POST .../reload` 的实现就是先
       `stop()` 再 `start()`。
-    - **每实例独立日志**：`<FRPSMGR_DATA_DIR>/logs/<id>.log`，worker 的
+    - **每实例独立日志**：`<CFDM_DATA_DIR>/logs/<id>.log`，worker 的
       stdout/stderr 全量落盘。
     - **配置数据模型**：业务层（请求/响应里的 `config` 字段）= `ServerConfigV1`，
       内嵌上游 `v1.ServerConfig`，**全 camelCase**（bindPort/vhostHTTPPort/auth/
@@ -123,7 +123,7 @@ paths:
       description: >
         起一个脱离进程下载最新 release、替换二进制并重启服务，立即返回 202。
         客户端轮询 /api/v1/version 直到 daemon 版本变化即完成。受
-        FRPSMGR_SELF_UPDATE_ENABLED 控制，仅服务部署可用（Docker/手动运行拒绝）。
+        CFDM_SELF_UPDATE_ENABLED 控制，仅服务部署可用（Docker/手动运行拒绝）。
         ?force=1 可在已是最新时强制重装。
       parameters:
         - in: query
@@ -969,7 +969,7 @@ components:
     BearerAuth:
       type: http
       scheme: bearer
-      description: '请求头 `Authorization: Bearer <FRPSMGR_API_TOKEN>`'
+      description: '请求头 `Authorization: Bearer <CFDM_API_TOKEN>`'
 
   parameters:
     IdInPath:

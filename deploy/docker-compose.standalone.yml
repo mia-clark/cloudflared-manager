@@ -1,24 +1,24 @@
 
 services:
-  frpsmgrd:
-    image: ghcr.io/mia-clark/frps-manager:${FRPSMGR_IMAGE_TAG:-latest}
-    container_name: docker_frpsmgrd
+  cfdmgrd:
+    image: ghcr.io/mia-clark/cloudflared-manager:${CFDM_IMAGE_TAG:-latest}
+    container_name: docker_cfdmgrd
     restart: always
     network_mode: host
     environment:
       # --- required ---
-      FRPSMGR_API_TOKEN: ${FRPSMGR_API_TOKEN:-admin@local}
+      CFDM_API_TOKEN: ${CFDM_API_TOKEN:-admin@local}
 
       # --- optional ---
-      FRPSMGR_HTTP_ADDR: ":${FRPSMGR_HTTP_PORT:-17200}"
-      FRPSMGR_CORS_ORIGINS: ${FRPSMGR_CORS_ORIGINS:-*}
-      FRPSMGR_LOG_LEVEL: ${FRPSMGR_LOG_LEVEL:-info}
-      FRPSMGR_DOCS_ENABLED: ${FRPSMGR_DOCS_ENABLED:-true}
+      CFDM_HTTP_ADDR: ":${CFDM_HTTP_PORT:-17200}"
+      CFDM_CORS_ORIGINS: ${CFDM_CORS_ORIGINS:-*}
+      CFDM_LOG_LEVEL: ${CFDM_LOG_LEVEL:-info}
+      CFDM_DOCS_ENABLED: ${CFDM_DOCS_ENABLED:-true}
       TZ: ${TZ:-UTC}
 
     volumes:
-      - ./frpsmgr-data:/data
-      # - ${FRPSMGR_DATA_DIR:-./data}:/data
+      - ./cfdmgr-data:/data
+      # - ${CFDM_DATA_DIR:-./data}:/data
 
     logging:
       driver: json-file
@@ -33,7 +33,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: ${FRPSMGR_MEMORY_LIMIT:-512M}
+          memory: ${CFDM_MEMORY_LIMIT:-512M}
         reservations:
           memory: 64M
 
@@ -42,9 +42,9 @@ services:
     # https://containrrr.dev/watchtower/
     # ------------------------------------------------------------------
     labels:
-      com.centurylinklabs.watchtower.enable: "${FRPSMGR_AUTOUPDATE:-false}"
+      com.centurylinklabs.watchtower.enable: "${CFDM_AUTOUPDATE:-false}"
 
 
 # networks:
-#   frpsmgr:
+#   cfdmgr:
 #     driver: bridge

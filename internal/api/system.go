@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mia-clark/frps-manager/internal/sysinfo"
-	"github.com/mia-clark/frps-manager/pkg/version"
+	"github.com/mia-clark/cloudflared-manager/internal/sysinfo"
+	"github.com/mia-clark/cloudflared-manager/pkg/version"
 )
 
 // SystemHandler exposes /health, /version and /api/v1/system/*.
@@ -33,11 +33,11 @@ func (s *SystemHandler) Health(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Version reports the daemon version, embedded frp version and build date.
+// Version reports the daemon version and build date. The cloudflared
+// binary version is reported by /api/v1/binaries (added in PR-05).
 func (s *SystemHandler) Version(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, http.StatusOK, map[string]any{
 		"daemon":     version.Number,
-		"frp":        version.FRPVersion,
 		"build_date": version.BuildDate,
 	})
 }
@@ -49,8 +49,8 @@ func (s *SystemHandler) Version(w http.ResponseWriter, r *http.Request) {
 func (s *SystemHandler) Info(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	out := map[string]any{
-		"uptime_s":   int64(time.Since(s.startedAt).Seconds()),
-		"data_dir":   s.dataDir,
+		"uptime_s": int64(time.Since(s.startedAt).Seconds()),
+		"data_dir": s.dataDir,
 	}
 	if v, err := sysinfo.Host(ctx); err == nil {
 		out["host"] = v

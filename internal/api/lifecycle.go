@@ -4,7 +4,7 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/mia-clark/frps-manager/internal/manager"
+	"github.com/mia-clark/cloudflared-manager/internal/manager"
 )
 
 // LifecycleHandler serves start/stop/reload endpoints.

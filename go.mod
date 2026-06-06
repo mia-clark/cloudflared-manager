@@ -1,4 +1,4 @@
-module github.com/mia-clark/frps-manager
+module github.com/mia-clark/cloudflared-manager
 
 go 1.25.0
 

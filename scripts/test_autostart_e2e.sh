@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # End-to-end test for the AutoStart-via-manualStart refactor.
 #
-# Spins up an isolated frpsmgrd on an alt port + data dir, exercises every
+# Spins up an isolated cfdmgrd on an alt port + data dir, exercises every
 # behavioral change in the recent fix, and asserts on daemon logs + API
 # responses. Does not touch the running dev environment.
 
@@ -10,7 +10,7 @@ set -uo pipefail
 PORT=${TEST_PORT:-18080}
 TOKEN=${TEST_TOKEN:-e2etest}
 DATA=${TEST_DATA:-tmp/test-autostart}
-BIN=${TEST_BIN:-./frpsmgrd-dev.exe}
+BIN=${TEST_BIN:-./cfdmgrd-dev.exe}
 BASE="http://127.0.0.1:${PORT}"
 PASS=0
 FAIL=0
@@ -29,10 +29,10 @@ DAEMON_PID=
 start_daemon() {
   local marker=$1
   : > "${DATA}/daemon.log"
-  FRPSMGR_HTTP_ADDR=":${PORT}" \
-  FRPSMGR_API_TOKEN="${TOKEN}" \
-  FRPSMGR_DATA_DIR="${DATA}" \
-  FRPSMGR_LOG_LEVEL=debug \
+  CFDM_HTTP_ADDR=":${PORT}" \
+  CFDM_API_TOKEN="${TOKEN}" \
+  CFDM_DATA_DIR="${DATA}" \
+  CFDM_LOG_LEVEL=debug \
   "${BIN}" serve >>"${DATA}/daemon.log" 2>&1 &
   DAEMON_PID=$!
   for _ in $(seq 1 50); do

@@ -4,8 +4,8 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/mia-clark/frps-manager/internal/selfupdate"
-	"github.com/mia-clark/frps-manager/pkg/version"
+	"github.com/mia-clark/cloudflared-manager/internal/selfupdate"
+	"github.com/mia-clark/cloudflared-manager/pkg/version"
 )
 
 // UpdateHandler serves the version-check and self-update endpoints:
@@ -19,7 +19,7 @@ type UpdateHandler struct {
 }
 
 // NewUpdateHandler wires an UpdateHandler. selfUpdateOn reflects
-// FRPSMGR_SELF_UPDATE_ENABLED; when false the POST endpoint is refused.
+// CFDM_SELF_UPDATE_ENABLED; when false the POST endpoint is refused.
 func NewUpdateHandler(dataDir string, selfUpdateOn bool, logger *slog.Logger) *UpdateHandler {
 	return &UpdateHandler{
 		updater: selfupdate.New(selfupdate.Config{
@@ -41,7 +41,6 @@ func (h *UpdateHandler) Check(w http.ResponseWriter, r *http.Request) {
 
 	out := map[string]any{
 		"current":             version.Number,
-		"frp":                 version.FRPVersion,
 		"deployment_mode":     string(mode),
 		"self_update_enabled": h.selfUpdateOn,
 	}
@@ -67,7 +66,7 @@ func (h *UpdateHandler) Check(w http.ResponseWriter, r *http.Request) {
 	// button. reason explains a disabled state.
 	canSelf := canDeploy && h.selfUpdateOn
 	if !h.selfUpdateOn {
-		reason = "管理员已禁用 Web 端自更新（FRPSMGR_SELF_UPDATE_ENABLED=false）"
+		reason = "管理员已禁用 Web 端自更新（CFDM_SELF_UPDATE_ENABLED=false）"
 	}
 	out["can_self_update"] = canSelf
 	out["reason"] = reason
@@ -82,7 +81,7 @@ func (h *UpdateHandler) Check(w http.ResponseWriter, r *http.Request) {
 func (h *UpdateHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if !h.selfUpdateOn {
 		WriteError(w, http.StatusForbidden, CodeForbidden,
-			"Web 端自更新已禁用（FRPSMGR_SELF_UPDATE_ENABLED=false）", nil)
+			"Web 端自更新已禁用（CFDM_SELF_UPDATE_ENABLED=false）", nil)
 		return
 	}
 

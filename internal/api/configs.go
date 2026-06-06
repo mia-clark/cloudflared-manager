@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/mia-clark/frps-manager/internal/manager"
-	"github.com/mia-clark/frps-manager/pkg/config"
+	"github.com/mia-clark/cloudflared-manager/internal/manager"
+	"github.com/mia-clark/cloudflared-manager/pkg/config"
 )
 
 // ConfigsHandler serves the /api/v1/configs endpoints.

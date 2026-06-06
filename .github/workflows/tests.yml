@@ -42,15 +42,15 @@ jobs:
           GOOS: linux
           GOARCH: amd64
         run: |
-          go build -trimpath -ldflags="-s -w" -o bin/frpsmgrd ./cmd/frpsmgrd
-          file bin/frpsmgrd
+          go build -trimpath -ldflags="-s -w" -o bin/cfdmgrd ./cmd/cfdmgrd
+          file bin/cfdmgrd
 
       - name: smoke run --version
-        run: ./bin/frpsmgrd version
+        run: ./bin/cfdmgrd version
 
       - uses: actions/upload-artifact@v4
         if: github.event_name == 'pull_request'
         with:
-          name: frpsmgrd-linux-amd64
-          path: bin/frpsmgrd
+          name: cfdmgrd-linux-amd64
+          path: bin/cfdmgrd
           retention-days: 7

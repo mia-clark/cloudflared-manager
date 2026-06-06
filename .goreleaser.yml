@@ -1,23 +1,23 @@
 version: 2
 
-project_name: frpsmgrd
+project_name: cfdmgrd
 
 before:
   hooks:
     - go mod tidy
 
 builds:
-  - id: frpsmgrd
-    main: ./cmd/frpsmgrd
-    binary: frpsmgrd
+  - id: cfdmgrd
+    main: ./cmd/cfdmgrd
+    binary: cfdmgrd
     env:
       - CGO_ENABLED=0
     flags:
       - -trimpath
     ldflags:
       - -s -w
-      - -X github.com/mia-clark/frps-manager/pkg/version.Number={{.Version}}
-      - -X github.com/mia-clark/frps-manager/pkg/version.BuildDate={{.Date}}
+      - -X github.com/mia-clark/cloudflared-manager/pkg/version.Number={{.Version}}
+      - -X github.com/mia-clark/cloudflared-manager/pkg/version.BuildDate={{.Date}}
     # 显式目标清单。modernc.org/sqlite 依赖的 modernc.org/libc 不为 mips/mipsle/
     # mips64/mips64le/loong64 提供 platform-specific 源文件 (undefined: newFile/long
     # /ulong)，这些目标会编译失败，故移除。riscv64 由 modernc/libc v1.61+ 支持。
@@ -52,7 +52,6 @@ archives:
       - README.md
       - LICENSE
       - CHANGELOG.md
-      - docs/README-server.md
 
 checksum:
   name_template: "checksums.txt"
@@ -88,13 +87,12 @@ release:
   mode: replace
   github:
     owner: mia-clark
-    name: frps-manager
+    name: cloudflared-manager
   header: |
-    ## frpsmgrd {{ .Tag }}
+    ## cfdmgrd {{ .Tag }}
 
-    Built from [`{{ .ShortCommit }}`](https://github.com/mia-clark/frps-manager/commit/{{ .FullCommit }}).
+    Built from [`{{ .ShortCommit }}`](https://github.com/mia-clark/cloudflared-manager/commit/{{ .FullCommit }}).
   footer: |
     ---
 
-    Container image: `ghcr.io/mia-clark/frps-manager:{{ .Version }}`
-    See [`docs/README-server.md`](https://github.com/mia-clark/frps-manager/blob/main/docs/README-server.md) for deployment.
+    Container image: `ghcr.io/mia-clark/cloudflared-manager:{{ .Version }}`

@@ -8,7 +8,7 @@ import (
 
 	fvalidation "github.com/fatedier/frp/pkg/config/v1/validation"
 
-	"github.com/mia-clark/frps-manager/pkg/config"
+	"github.com/mia-clark/cloudflared-manager/pkg/config"
 )
 
 // ValidateHandler serves POST /api/v1/validate. It accepts either JSON

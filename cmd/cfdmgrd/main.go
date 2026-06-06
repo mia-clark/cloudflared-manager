@@ -14,12 +14,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mia-clark/frps-manager/internal/api"
-	"github.com/mia-clark/frps-manager/internal/appcfg"
-	"github.com/mia-clark/frps-manager/internal/eventbus"
-	"github.com/mia-clark/frps-manager/internal/manager"
-	"github.com/mia-clark/frps-manager/internal/metrics"
-	"github.com/mia-clark/frps-manager/pkg/version"
+	"github.com/mia-clark/cloudflared-manager/internal/api"
+	"github.com/mia-clark/cloudflared-manager/internal/appcfg"
+	"github.com/mia-clark/cloudflared-manager/internal/eventbus"
+	"github.com/mia-clark/cloudflared-manager/internal/manager"
+	"github.com/mia-clark/cloudflared-manager/internal/metrics"
+	"github.com/mia-clark/cloudflared-manager/pkg/version"
 )
 
 func main() {
@@ -30,12 +30,10 @@ func main() {
 	switch os.Args[1] {
 	case "serve":
 		os.Exit(runServe(os.Args[2:]))
-	case "frps-worker":
-		os.Exit(runFrpsWorker(os.Args[2:]))
 	case "health":
 		os.Exit(runHealth(os.Args[2:]))
 	case "version", "-v", "--version":
-		fmt.Printf("frpsmgrd %s (frp %s, built %s)\n", version.Number, version.FRPVersion, version.BuildDate)
+		fmt.Printf("cfdmgrd %s (built %s)\n", version.Number, version.BuildDate)
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -46,10 +44,10 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, `frpsmgrd — headless FRP client manager daemon
+	fmt.Fprintln(os.Stderr, `cfdmgrd — headless cloudflared multi-instance manager daemon
 
 USAGE
-  frpsmgrd <command> [flags]
+  cfdmgrd <command> [flags]
 
 COMMANDS
   serve     Run the HTTP API server (default for containers)
@@ -58,12 +56,12 @@ COMMANDS
   help      Show this help
 
 ENV
-  FRPSMGR_API_TOKEN       Required. Bearer token for API auth.
-  FRPSMGR_HTTP_ADDR       Listen address (default ":8080")
-  FRPSMGR_DATA_DIR        Data root (default "/data")
-  FRPSMGR_CORS_ORIGINS    Comma-separated origins or "*" (default "*")
-  FRPSMGR_LOG_LEVEL       trace|debug|info|warn|error (default "info")
-  FRPSMGR_DOCS_ENABLED    Expose /api/docs Scalar UI (default "true")`)
+  CFDM_API_TOKEN       Required. Bearer token for API auth.
+  CFDM_HTTP_ADDR       Listen address (default ":8080")
+  CFDM_DATA_DIR        Data root (default "/var/lib/cfdmgrd")
+  CFDM_CORS_ORIGINS    Comma-separated origins or "*" (default "*")
+  CFDM_LOG_LEVEL       trace|debug|info|warn|error (default "info")
+  CFDM_DOCS_ENABLED    Expose /api/docs Scalar UI (default "true")`)
 }
 
 func runServe(args []string) int {
@@ -81,11 +79,10 @@ func runServe(args []string) int {
 	}
 
 	logger := newLogger(cfg.LogLevel)
-	logger.Info("starting frpsmgrd",
+	logger.Info("starting cfdmgrd",
 		slog.String("addr", cfg.HTTPAddr),
 		slog.String("data_dir", cfg.DataDir),
 		slog.String("version", version.Number),
-		slog.String("frp", version.FRPVersion),
 	)
 
 	bus := eventbus.New(1024)
@@ -108,8 +105,9 @@ func runServe(args []string) int {
 	mgr.AutoStart()
 	defer mgr.Shutdown()
 
-	// 时序指标存储 + 采样器（P3）：纯 Go SQLite，落 $DataDir/metrics.db。
-	// 采样器经各 worker loopback 每 10s 读 frps mem 指标 → 落库 + 评估告警。
+	// 时序指标存储 + 采样器：纯 Go SQLite，落 $DataDir/metrics.db。
+	// 注意：当前 sampler 内部仍指向旧 worker 的 loopback 读取路径（PR-01 不动业务逻辑）。
+	// 这条路径将由后续 PR 替换：PR-04 改 worker → PR-07 改 sampler 拉 cloudflared --metrics。
 	mstore, err := metrics.Open(filepath.Join(cfg.DataDir, "metrics.db"))
 	if err != nil {
 		logger.Warn("metrics store disabled", slog.Any("err", err))

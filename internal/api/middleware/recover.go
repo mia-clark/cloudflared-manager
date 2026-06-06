@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"runtime/debug"
 
-	"github.com/mia-clark/frps-manager/internal/api/apiresp"
+	"github.com/mia-clark/cloudflared-manager/internal/api/apiresp"
 )
 
 // Recover turns panics inside handlers into 500 responses instead of

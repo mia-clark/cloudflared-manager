@@ -222,8 +222,8 @@ jobs:
             type=raw,value=latest
             type=sha,prefix=sha-,format=short
           labels: |
-            org.opencontainers.image.title=frps-manager
-            org.opencontainers.image.description=Headless FRP client manager with REST + WebSocket API
+            org.opencontainers.image.title=cloudflared-manager
+            org.opencontainers.image.description=Headless cloudflared multi-instance manager with REST + WebSocket API
             org.opencontainers.image.licenses=GPL-3.0
             org.opencontainers.image.version=${{ needs.bump.outputs.version }}
 

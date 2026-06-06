@@ -1,4 +1,4 @@
-// Package selfupdate queries the latest GitHub release of frps-manager,
+// Package selfupdate queries the latest GitHub release of cloudflared-manager,
 // compares it with the running version, detects how the daemon is deployed,
 // and (where possible) launches a detached process that upgrades the binary
 // in place and restarts the service.
@@ -23,9 +23,9 @@ import (
 )
 
 const (
-	defaultRepo       = "mia-clark/frps-manager"
-	defaultInstallSh  = "https://raw.githubusercontent.com/mia-clark/frps-manager/main/scripts/install.sh"
-	defaultInstallPs1 = "https://raw.githubusercontent.com/mia-clark/frps-manager/main/scripts/install.ps1"
+	defaultRepo       = "mia-clark/cloudflared-manager"
+	defaultInstallSh  = "https://raw.githubusercontent.com/mia-clark/cloudflared-manager/main/scripts/install.sh"
+	defaultInstallPs1 = "https://raw.githubusercontent.com/mia-clark/cloudflared-manager/main/scripts/install.ps1"
 	cacheTTL          = time.Hour
 	httpTimeout       = 12 * time.Second
 )
@@ -48,11 +48,11 @@ type Release struct {
 
 // Config configures an Updater.
 type Config struct {
-	// Repo is the "owner/name" GitHub repo. Defaults to mia-clark/frps-manager.
+	// Repo is the "owner/name" GitHub repo. Defaults to mia-clark/cloudflared-manager.
 	Repo string
 	// InstallShURL / InstallPs1URL point at the installer scripts the spawned
 	// updater downloads. Empty values fall back to the official raw URLs,
-	// overridable via FRPSMGR_INSTALL_SH_URL / FRPSMGR_INSTALL_PS1_URL.
+	// overridable via CFDM_INSTALL_SH_URL / CFDM_INSTALL_PS1_URL.
 	InstallShURL  string
 	InstallPs1URL string
 	// DataDir is where update.log is written.
@@ -75,10 +75,10 @@ func New(cfg Config) *Updater {
 		cfg.Repo = defaultRepo
 	}
 	if cfg.InstallShURL == "" {
-		cfg.InstallShURL = env("FRPSMGR_INSTALL_SH_URL", defaultInstallSh)
+		cfg.InstallShURL = env("CFDM_INSTALL_SH_URL", defaultInstallSh)
 	}
 	if cfg.InstallPs1URL == "" {
-		cfg.InstallPs1URL = env("FRPSMGR_INSTALL_PS1_URL", defaultInstallPs1)
+		cfg.InstallPs1URL = env("CFDM_INSTALL_PS1_URL", defaultInstallPs1)
 	}
 	return &Updater{
 		cfg:  cfg,
@@ -134,7 +134,7 @@ func (u *Updater) fetchOne(ctx context.Context, url string) (*Release, error) {
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "frpsmgrd-selfupdate")
+	req.Header.Set("User-Agent", "cfdmgrd-selfupdate")
 
 	resp, err := u.http.Do(req)
 	if err != nil {

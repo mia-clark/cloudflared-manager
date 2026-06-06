@@ -11,10 +11,10 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/mia-clark/frps-manager/internal/api/middleware"
-	"github.com/mia-clark/frps-manager/internal/logtail"
-	"github.com/mia-clark/frps-manager/internal/manager"
-	"github.com/mia-clark/frps-manager/pkg/util"
+	"github.com/mia-clark/cloudflared-manager/internal/api/middleware"
+	"github.com/mia-clark/cloudflared-manager/internal/logtail"
+	"github.com/mia-clark/cloudflared-manager/internal/manager"
+	"github.com/mia-clark/cloudflared-manager/pkg/util"
 )
 
 // LogsHandler serves /api/v1/configs/{id}/logs*.

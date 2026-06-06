@@ -8,29 +8,29 @@
 # ============================================================================
 
 services:
-  frpsmgrd:
+  cfdmgrd:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
       args:
         VERSION: ${VERSION:-dev}
         BUILD_DATE: ${BUILD_DATE:-unknown}
-    image: frps-manager:${VERSION:-dev}
-    container_name: frpsmgrd
+    image: cloudflared-manager:${VERSION:-dev}
+    container_name: cfdmgrd
     restart: unless-stopped
     # host network is recommended for frpc so that xtcp / NAT hole
     # punching works correctly. Switch to bridge if you only need plain
     # tcp/http proxies and want stricter isolation.
     network_mode: host
     environment:
-      FRPSMGR_API_TOKEN: ${FRPSMGR_API_TOKEN:?api token required (set in .env)}
-      FRPSMGR_HTTP_ADDR: ":${FRPSMGR_HTTP_PORT:-8080}"
-      FRPSMGR_CORS_ORIGINS: ${FRPSMGR_CORS_ORIGINS:-*}
-      FRPSMGR_LOG_LEVEL: ${FRPSMGR_LOG_LEVEL:-info}
+      CFDM_API_TOKEN: ${CFDM_API_TOKEN:?api token required (set in .env)}
+      CFDM_HTTP_ADDR: ":${CFDM_HTTP_PORT:-8080}"
+      CFDM_CORS_ORIGINS: ${CFDM_CORS_ORIGINS:-*}
+      CFDM_LOG_LEVEL: ${CFDM_LOG_LEVEL:-info}
     volumes:
       - ./data:/data
     healthcheck:
-      test: ["CMD", "/usr/local/bin/frpsmgrd", "health", "-addr", "http://127.0.0.1:${FRPSMGR_HTTP_PORT:-8080}"]
+      test: ["CMD", "/usr/local/bin/cfdmgrd", "health", "-addr", "http://127.0.0.1:${CFDM_HTTP_PORT:-8080}"]
       interval: 30s
       timeout: 5s
       retries: 3

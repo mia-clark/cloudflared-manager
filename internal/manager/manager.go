@@ -13,9 +13,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/mia-clark/frps-manager/internal/eventbus"
-	"github.com/mia-clark/frps-manager/pkg/config"
-	"github.com/mia-clark/frps-manager/pkg/consts"
+	"github.com/mia-clark/cloudflared-manager/internal/eventbus"
+	"github.com/mia-clark/cloudflared-manager/pkg/config"
+	"github.com/mia-clark/cloudflared-manager/pkg/consts"
 )
 
 // Options configures the Manager.
