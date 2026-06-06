@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/mia-clark/cloudflared-manager/internal/eventbus"
-	"github.com/mia-clark/cloudflared-manager/pkg/consts"
+	"github.com/mia-clark/cloudflared-manager/pkg/cfdstate"
 	"github.com/mia-clark/cloudflared-manager/pkg/util"
 )
 
@@ -26,7 +26,7 @@ type instance struct {
 	path string
 
 	mu      sync.RWMutex
-	state   consts.ConfigState
+	state   cfdstate.ConfigState
 	lastErr string
 	startAt time.Time
 	stopAt  time.Time
@@ -45,7 +45,7 @@ func newInstance(id, path string, logger *slog.Logger, bus *eventbus.Bus, selfEx
 	return &instance{
 		id:      id,
 		path:    path,
-		state:   consts.ConfigStateStopped,
+		state:   cfdstate.ConfigStateStopped,
 		logger:  logger.With(slog.String("config_id", id)),
 		bus:     bus,
 		selfExe: selfExe,
@@ -66,8 +66,8 @@ func (i *instance) Path() string { return i.path }
 type Snapshot struct {
 	ID        string     `json:"id"`
 	Name      string     `json:"name"`
-	Path      string     `json:"path"`      // toml 配置文件路径
-	LogPath   string     `json:"log_path"`  // 管理器接管该实例 worker 输出的日志文件路径
+	Path      string     `json:"path"`     // toml 配置文件路径
+	LogPath   string     `json:"log_path"` // 管理器接管该实例 worker 输出的日志文件路径
 	State     string     `json:"state"`
 	LastError string     `json:"last_error,omitempty"`
 	StartedAt *time.Time `json:"started_at,omitempty"`
@@ -98,14 +98,14 @@ func (i *instance) Snapshot() Snapshot {
 }
 
 // State returns the current lifecycle state.
-func (i *instance) State() consts.ConfigState {
+func (i *instance) State() cfdstate.ConfigState {
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 	return i.state
 }
 
 // setState assigns a new state under lock and returns whether it changed.
-func (i *instance) setState(s consts.ConfigState) bool {
+func (i *instance) setState(s cfdstate.ConfigState) bool {
 	i.mu.Lock()
 	prev := i.state
 	if i.state == s {
@@ -114,9 +114,9 @@ func (i *instance) setState(s consts.ConfigState) bool {
 	}
 	i.state = s
 	switch s {
-	case consts.ConfigStateStarted:
+	case cfdstate.ConfigStateStarted:
 		i.startAt = time.Now()
-	case consts.ConfigStateStopped:
+	case cfdstate.ConfigStateStopped:
 		i.stopAt = time.Now()
 	}
 	i.mu.Unlock()
@@ -133,11 +133,11 @@ func (i *instance) setState(s consts.ConfigState) bool {
 // It is a no-op if the instance is already running.
 func (i *instance) start(ctx context.Context) error {
 	i.mu.Lock()
-	if i.state == consts.ConfigStateStarted || i.state == consts.ConfigStateStarting {
+	if i.state == cfdstate.ConfigStateStarted || i.state == cfdstate.ConfigStateStarting {
 		i.mu.Unlock()
 		return errors.New("already running")
 	}
-	i.state = consts.ConfigStateStarting
+	i.state = cfdstate.ConfigStateStarting
 	i.lastErr = ""
 	i.mu.Unlock()
 
@@ -146,7 +146,7 @@ func (i *instance) start(ctx context.Context) error {
 	if err != nil {
 		cancel()
 		i.recordError(err)
-		i.setState(consts.ConfigStateStopped)
+		i.setState(cfdstate.ConfigStateStopped)
 		return fmt.Errorf("spawn frps worker: %w", err)
 	}
 	i.mu.Lock()
@@ -159,18 +159,18 @@ func (i *instance) start(ctx context.Context) error {
 	go func() {
 		w.reap()
 		i.mu.Lock()
-		stopping := i.state == consts.ConfigStateStopping
+		stopping := i.state == cfdstate.ConfigStateStopping
 		i.w = nil
 		i.cancel = nil
 		i.mu.Unlock()
 		cancel()
 		if !stopping {
-			i.setState(consts.ConfigStateStopped)
+			i.setState(cfdstate.ConfigStateStopped)
 			i.logger.Info("frps worker exited")
 		}
 	}()
 
-	i.setState(consts.ConfigStateStarted)
+	i.setState(cfdstate.ConfigStateStarted)
 	i.logger.Info("frps instance started", slog.String("loopback", w.hs.Addr))
 	return nil
 }
@@ -178,11 +178,11 @@ func (i *instance) start(ctx context.Context) error {
 // stop terminates the worker child process and waits for it to be reaped.
 func (i *instance) stop() error {
 	i.mu.Lock()
-	if i.state == consts.ConfigStateStopped || i.state == consts.ConfigStateStopping {
+	if i.state == cfdstate.ConfigStateStopped || i.state == cfdstate.ConfigStateStopping {
 		i.mu.Unlock()
 		return nil
 	}
-	i.state = consts.ConfigStateStopping
+	i.state = cfdstate.ConfigStateStopping
 	cancel := i.cancel
 	w := i.w
 	i.mu.Unlock()
@@ -197,7 +197,7 @@ func (i *instance) stop() error {
 	i.w = nil
 	i.cancel = nil
 	i.mu.Unlock()
-	i.setState(consts.ConfigStateStopped)
+	i.setState(cfdstate.ConfigStateStopped)
 	i.logger.Info("frps instance stopped")
 	return nil
 }
@@ -242,15 +242,15 @@ func idFromPath(path string) string {
 	return util.FileNameWithoutExt(filepath.Base(path))
 }
 
-func stateString(s consts.ConfigState) string {
+func stateString(s cfdstate.ConfigState) string {
 	switch s {
-	case consts.ConfigStateStarted:
+	case cfdstate.ConfigStateStarted:
 		return "started"
-	case consts.ConfigStateStopped:
+	case cfdstate.ConfigStateStopped:
 		return "stopped"
-	case consts.ConfigStateStarting:
+	case cfdstate.ConfigStateStarting:
 		return "starting"
-	case consts.ConfigStateStopping:
+	case cfdstate.ConfigStateStopping:
 		return "stopping"
 	default:
 		return "unknown"

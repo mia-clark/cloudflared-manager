@@ -14,8 +14,8 @@ import (
 	"sync"
 
 	"github.com/mia-clark/cloudflared-manager/internal/eventbus"
+	"github.com/mia-clark/cloudflared-manager/pkg/cfdstate"
 	"github.com/mia-clark/cloudflared-manager/pkg/config"
-	"github.com/mia-clark/cloudflared-manager/pkg/consts"
 )
 
 // Options configures the Manager.
@@ -287,7 +287,7 @@ func (m *Manager) Update(id string, sc *config.ServerConfigV1, mm MgrMeta) error
 	}
 	_ = m.meta.setName(id, mm.Name)
 	_ = m.meta.setManualStart(id, mm.ManualStart)
-	if inst.State() == consts.ConfigStateStarted {
+	if inst.State() == cfdstate.ConfigStateStarted {
 		if err := inst.reload(m.rootCtx); err != nil {
 			m.opts.Logger.Warn("reload after update failed", slog.String("id", id), slog.Any("err", err))
 		}
@@ -372,7 +372,7 @@ func (m *Manager) WriteRaw(id string, b []byte) error {
 	if err := writeAtomic(inst.Path(), b); err != nil {
 		return err
 	}
-	if inst.State() == consts.ConfigStateStarted {
+	if inst.State() == cfdstate.ConfigStateStarted {
 		if err := inst.reload(m.rootCtx); err != nil {
 			m.opts.Logger.Warn("reload after raw write failed", slog.String("id", id), slog.Any("err", err))
 		}
@@ -412,7 +412,7 @@ func (m *Manager) RunningIDs() []string {
 	defer m.mu.RUnlock()
 	out := make([]string, 0, len(m.instances))
 	for id, inst := range m.instances {
-		if inst.State() == consts.ConfigStateStarted {
+		if inst.State() == cfdstate.ConfigStateStarted {
 			out = append(out, id)
 		}
 	}
