@@ -1,0 +1,59 @@
+package api
+
+import (
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+
+	"github.com/go-chi/chi/v5"
+
+	"github.com/mia-clark/frps-manager/internal/manager"
+)
+
+// pathID returns the chi URL param "id" or empty string.
+func pathID(r *http.Request) string {
+	return chi.URLParam(r, "id")
+}
+
+// pathName returns the chi URL param "name" or empty string.
+func pathName(r *http.Request) string {
+	return chi.URLParam(r, "name")
+}
+
+// decodeJSON parses the request body into dst. A 400 is written and false
+// returned on failure.
+func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
+	dec := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		WriteError(w, http.StatusBadRequest, CodeBadRequest, "invalid JSON body: "+err.Error(), nil)
+		return false
+	}
+	return true
+}
+
+// writeManagerError maps manager sentinel errors to HTTP responses.
+// Returns true if it handled the error.
+func writeManagerError(w http.ResponseWriter, err error) bool {
+	if err == nil {
+		return false
+	}
+	switch {
+	case errors.Is(err, manager.ErrNotFound):
+		WriteError(w, http.StatusNotFound, CodeConfigNotFound, err.Error(), nil)
+	case errors.Is(err, manager.ErrExists):
+		WriteError(w, http.StatusConflict, CodeConfigExists, err.Error(), nil)
+	default:
+		// State-machine violations ("already running" / "not running") are
+		// 409 Conflict — the resource exists but its current state forbids
+		// the requested transition.
+		msg := err.Error()
+		if msg == "already running" || msg == "not running" {
+			WriteError(w, http.StatusConflict, CodeInvalidState, msg, nil)
+		} else {
+			WriteError(w, http.StatusBadRequest, CodeBadRequest, msg, nil)
+		}
+	}
+	return true
+}

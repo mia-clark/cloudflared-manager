@@ -1,0 +1,26 @@
+.git/
+.github/
+bin/
+tmp/
+docs/
+*.md
+!CHANGELOG.md
+!LICENSE
+.golangci.yml
+.gitignore
+
+# 前端产物 —— Dockerfile 的 web-build 阶段会在镜像内重新 npm build，
+# 所以根上下文里的 web/dist 一律排除（无论新旧），保证镜像构建可重复且
+# 不被宿主机的脏 dist 污染。
+web/node_modules/
+web/.vite/
+web/dist/
+
+# Windows 本地构建产物
+*.exe
+*.exe~
+
+# Claude / 编辑器临时
+.claude/
+.idea/
+.vscode/

@@ -1,0 +1,13 @@
+bin/
+dist/
+tmp/
+data/
+node_modules/
+*.syso
+*.exe
+*.exe~
+.env
+.idea/
+.vscode/
+web/.vite/
+docs/.local/

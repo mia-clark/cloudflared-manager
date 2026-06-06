@@ -1,0 +1,50 @@
+
+services:
+  frpsmgrd:
+    image: ghcr.io/mia-clark/frps-manager:${FRPSMGR_IMAGE_TAG:-latest}
+    container_name: docker_frpsmgrd
+    restart: always
+    network_mode: host
+    environment:
+      # --- required ---
+      FRPSMGR_API_TOKEN: ${FRPSMGR_API_TOKEN:-admin@local}
+
+      # --- optional ---
+      FRPSMGR_HTTP_ADDR: ":${FRPSMGR_HTTP_PORT:-17200}"
+      FRPSMGR_CORS_ORIGINS: ${FRPSMGR_CORS_ORIGINS:-*}
+      FRPSMGR_LOG_LEVEL: ${FRPSMGR_LOG_LEVEL:-info}
+      FRPSMGR_DOCS_ENABLED: ${FRPSMGR_DOCS_ENABLED:-true}
+      TZ: ${TZ:-UTC}
+
+    volumes:
+      - ./frpsmgr-data:/data
+      # - ${FRPSMGR_DATA_DIR:-./data}:/data
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+    # ------------------------------------------------------------------
+    # Resource hints. Comment out if you don't use compose v2 deploy
+    # constraints. Defaults are generous; the daemon idles at ~30 MB.
+    # ------------------------------------------------------------------
+    deploy:
+      resources:
+        limits:
+          memory: ${FRPSMGR_MEMORY_LIMIT:-512M}
+        reservations:
+          memory: 64M
+
+    # ------------------------------------------------------------------
+    # Optional: opt-in to Watchtower for unattended image updates.
+    # https://containrrr.dev/watchtower/
+    # ------------------------------------------------------------------
+    labels:
+      com.centurylinklabs.watchtower.enable: "${FRPSMGR_AUTOUPDATE:-false}"
+
+
+# networks:
+#   frpsmgr:
+#     driver: bridge

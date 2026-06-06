@@ -1,0 +1,112 @@
+:root {
+  font-family: 'Inter', 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+body {
+  background: transparent;
+}
+
+/* 滚动条美化：跟随主题颜色 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.25);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(128, 128, 128, 0.45);
+}
+
+/* 深色侧栏（始终深色）下的滚动条更柔和 */
+[data-theme='dark'] ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+}
+[data-theme='dark'] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.34);
+}
+
+/* 状态呼吸灯 */
+@keyframes active-glow {
+  0%, 100% {
+    box-shadow: 0 0 4px rgba(82, 196, 26, 0.35), 0 0 8px rgba(82, 196, 26, 0.18);
+  }
+  50% {
+    box-shadow: 0 0 10px rgba(82, 196, 26, 0.7), 0 0 16px rgba(82, 196, 26, 0.4);
+  }
+}
+.status-indicator-running {
+  width: 8px;
+  height: 8px;
+  background-color: #52c41a;
+  border-radius: 50%;
+  display: inline-block;
+  animation: active-glow 2s infinite ease-in-out;
+}
+
+@keyframes error-glow {
+  0%, 100% {
+    box-shadow: 0 0 4px rgba(255, 77, 79, 0.35), 0 0 8px rgba(255, 77, 79, 0.18);
+  }
+  50% {
+    box-shadow: 0 0 10px rgba(255, 77, 79, 0.7), 0 0 16px rgba(255, 77, 79, 0.4);
+  }
+}
+.status-indicator-error {
+  width: 8px;
+  height: 8px;
+  background-color: #ff4d4f;
+  border-radius: 50%;
+  display: inline-block;
+  animation: error-glow 2s infinite ease-in-out;
+}
+
+.status-indicator-stopped {
+  width: 8px;
+  height: 8px;
+  background-color: #bfbfbf;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+/* 极客终端日志外观（仅在 .terminal-container 内部生效，不污染整体主题） */
+.terminal-container {
+  background-color: #0b0f12;
+  border: 1px solid #1a1e22;
+  border-radius: 8px;
+  font-family: 'Fira Code', 'JetBrains Mono', 'Courier New', Courier, monospace;
+  font-size: 13px;
+  color: #d1d5db;
+  padding: 12px;
+  overflow-y: auto;
+  box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.6);
+}
+.log-line {
+  margin: 0;
+  padding: 2px 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.log-info { color: #52c41a; }
+.log-warn { color: #faad14; }
+.log-error { color: #ff4d4f; }
+.log-debug { color: #1677ff; }

@@ -1,0 +1,100 @@
+version: 2
+
+project_name: frpsmgrd
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: frpsmgrd
+    main: ./cmd/frpsmgrd
+    binary: frpsmgrd
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/mia-clark/frps-manager/pkg/version.Number={{.Version}}
+      - -X github.com/mia-clark/frps-manager/pkg/version.BuildDate={{.Date}}
+    # 显式目标清单。modernc.org/sqlite 依赖的 modernc.org/libc 不为 mips/mipsle/
+    # mips64/mips64le/loong64 提供 platform-specific 源文件 (undefined: newFile/long
+    # /ulong)，这些目标会编译失败，故移除。riscv64 由 modernc/libc v1.61+ 支持。
+    # arm 用 goarm 后缀 (v6/v7)；amd64/arm64/386/riscv64 用默认微架构。
+    targets:
+      - linux_amd64
+      - linux_arm64
+      - linux_arm_6
+      - linux_arm_7
+      - linux_386
+      - linux_riscv64
+      - darwin_amd64
+      - darwin_arm64
+      - windows_amd64
+      - windows_arm64
+      - windows_386
+      - freebsd_amd64
+      - freebsd_arm64
+      # 不发布：mips/mipsle/mips64/mips64le/loong64 — modernc.org/libc 缺源
+      # 不发布：android_arm64 — wlynxg/anet 在 Go 1.25 下 linkname net.zoneCache
+      #         失效；termux 用户可直接用 linux_arm64 静态二进制
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ with .Arm }}v{{ . }}{{ end }}
+    files:
+      - README.md
+      - LICENSE
+      - CHANGELOG.md
+      - docs/README-server.md
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-dev+{{ .ShortCommit }}"
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+      - "Merge pull request"
+      - "Merge branch"
+  groups:
+    - title: "Features"
+      regexp: '^.*?feat(\(.+\))??:.+$'
+      order: 0
+    - title: "Bug fixes"
+      regexp: '^.*?fix(\(.+\))??:.+$'
+      order: 1
+    - title: "Other"
+      order: 999
+
+release:
+  draft: false
+  prerelease: auto
+  mode: replace
+  github:
+    owner: mia-clark
+    name: frps-manager
+  header: |
+    ## frpsmgrd {{ .Tag }}
+
+    Built from [`{{ .ShortCommit }}`](https://github.com/mia-clark/frps-manager/commit/{{ .FullCommit }}).
+  footer: |
+    ---
+
+    Container image: `ghcr.io/mia-clark/frps-manager:{{ .Version }}`
+    See [`docs/README-server.md`](https://github.com/mia-clark/frps-manager/blob/main/docs/README-server.md) for deployment.
