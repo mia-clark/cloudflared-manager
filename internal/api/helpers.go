@@ -21,6 +21,11 @@ func pathName(r *http.Request) string {
 	return chi.URLParam(r, "name")
 }
 
+// pathVersion returns the chi URL param "version" or empty string.
+func pathVersion(r *http.Request) string {
+	return chi.URLParam(r, "version")
+}
+
 // decodeJSON parses the request body into dst. A 400 is written and false
 // returned on failure.
 func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {

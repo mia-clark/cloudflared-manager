@@ -10,6 +10,7 @@ import (
 
 	"github.com/mia-clark/cloudflared-manager/internal/api/middleware"
 	"github.com/mia-clark/cloudflared-manager/internal/appcfg"
+	"github.com/mia-clark/cloudflared-manager/internal/cfdbin"
 	"github.com/mia-clark/cloudflared-manager/internal/manager"
 	"github.com/mia-clark/cloudflared-manager/internal/metrics"
 	"github.com/mia-clark/cloudflared-manager/web"
@@ -17,10 +18,12 @@ import (
 
 // Deps bundles the collaborators that handlers need.
 type Deps struct {
-	Cfg     *appcfg.Config
-	Logger  *slog.Logger
-	Manager *manager.Manager
-	Metrics *metrics.Store // may be nil if metrics disabled
+	Cfg              *appcfg.Config
+	Logger           *slog.Logger
+	Manager          *manager.Manager
+	Metrics          *metrics.Store     // may be nil if metrics disabled
+	BinaryStore      *cfdbin.Store      // may be nil; binaries endpoints degrade gracefully
+	BinaryDownloader *cfdbin.Downloader // may be nil; binaries endpoints degrade gracefully
 }
 
 // NewRouter assembles the chi mux with all middleware and route groups
@@ -54,6 +57,7 @@ func NewRouter(d Deps) http.Handler {
 	imex := NewImportExportHandler(d.Manager, d.Logger)
 	mh := NewMetricsHandler(d.Metrics)
 	upd := NewUpdateHandler(d.Cfg.DataDir, d.Cfg.SelfUpdateEnabled, d.Logger)
+	binaries := NewBinariesHandler(d.BinaryStore, d.BinaryDownloader, d.Logger)
 
 	// Authenticated subtree.
 	r.Group(func(r chi.Router) {
@@ -118,6 +122,12 @@ func NewRouter(d Deps) http.Handler {
 		r.Get("/api/v1/system/network", sys.Network)
 		r.Get("/api/v1/system/connections", sys.Connections)
 		r.Get("/api/v1/system/process", sys.Process)
+
+		r.Get("/api/v1/binaries", binaries.List)
+		r.Get("/api/v1/binaries/available", binaries.Available)
+		r.Post("/api/v1/binaries/install", binaries.Install)
+		r.Post("/api/v1/binaries/{version}/activate", binaries.Activate)
+		r.Delete("/api/v1/binaries/{version}", binaries.Delete)
 	})
 
 	// WebUI 静态文件分发 & SPA 路由兼容

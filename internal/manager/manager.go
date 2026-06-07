@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/mia-clark/cloudflared-manager/internal/cfdbin"
 	"github.com/mia-clark/cloudflared-manager/internal/eventbus"
 	"github.com/mia-clark/cloudflared-manager/pkg/cfdstate"
 	"github.com/mia-clark/cloudflared-manager/pkg/config"
@@ -26,6 +27,7 @@ type Options struct {
 	MetaPath    string
 	Logger      *slog.Logger
 	Bus         *eventbus.Bus
+	BinaryStore *cfdbin.Store // may be nil; instance falls back to PATH lookup
 }
 
 // Manager is the central registry of cloudflared connector instances.
@@ -34,7 +36,8 @@ type Options struct {
 // child process supervised by internal/process.Worker (PR-04 replaced
 // the previous frps re-exec-self model).
 type Manager struct {
-	opts Options
+	opts     Options
+	binStore *cfdbin.Store // mirrors opts.BinaryStore for convenience
 
 	mu        sync.RWMutex
 	instances map[string]*instance
@@ -62,6 +65,7 @@ func New(opts Options) (*Manager, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Manager{
 		opts:       opts,
+		binStore:   opts.BinaryStore,
 		instances:  make(map[string]*instance),
 		logs:       make(map[string]*instanceLog),
 		meta:       meta,
@@ -101,7 +105,7 @@ func (m *Manager) LoadAll() error {
 // register builds and stores an instance for id at path. Caller must ensure
 // the file exists and parses.
 func (m *Manager) register(id, path string) *instance {
-	inst := newInstance(id, path, m.opts.Logger, m.opts.Bus, m.logWriter(id))
+	inst := newInstance(id, path, m.opts.Logger, m.opts.Bus, m.logWriter(id), m.binStore)
 	m.mu.Lock()
 	m.instances[id] = inst
 	m.mu.Unlock()

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mia-clark/cloudflared-manager/internal/cfdbin"
 	"github.com/mia-clark/cloudflared-manager/internal/eventbus"
 	"github.com/mia-clark/cloudflared-manager/internal/process"
 	"github.com/mia-clark/cloudflared-manager/pkg/cfdstate"
@@ -33,19 +34,21 @@ type instance struct {
 	w      *process.Worker
 	cancel context.CancelFunc
 
-	logger  *slog.Logger
-	bus     *eventbus.Bus
-	logSink io.Writer
+	logger   *slog.Logger
+	bus      *eventbus.Bus
+	logSink  io.Writer
+	binStore *cfdbin.Store // may be nil; start() falls back to PATH "cloudflared"
 }
 
-func newInstance(id, path string, logger *slog.Logger, bus *eventbus.Bus, logSink io.Writer) *instance {
+func newInstance(id, path string, logger *slog.Logger, bus *eventbus.Bus, logSink io.Writer, binStore *cfdbin.Store) *instance {
 	return &instance{
-		id:      id,
-		path:    path,
-		state:   cfdstate.ConfigStateStopped,
-		logger:  logger.With(slog.String("config_id", id)),
-		bus:     bus,
-		logSink: logSink,
+		id:       id,
+		path:     path,
+		state:    cfdstate.ConfigStateStopped,
+		logger:   logger.With(slog.String("config_id", id)),
+		bus:      bus,
+		logSink:  logSink,
+		binStore: binStore,
 	}
 }
 
@@ -144,9 +147,16 @@ func (i *instance) start(ctx context.Context) error {
 	i.lastErr = ""
 	i.mu.Unlock()
 
+	binPath := "cloudflared"
+	if i.binStore != nil {
+		if p, err := i.binStore.Resolve(""); err == nil {
+			binPath = p
+		}
+	}
+
 	runCtx, cancel := context.WithCancel(ctx)
 	w, err := process.Spawn(runCtx, process.SpawnParams{
-		BinaryPath:   "cloudflared",
+		BinaryPath:   binPath,
 		Args:         []string{"tunnel", "--no-autoupdate", "run"},
 		LogSink:      i.logSink,
 		StartupGrace: 5 * time.Second,

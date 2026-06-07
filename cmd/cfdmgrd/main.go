@@ -16,6 +16,7 @@ import (
 
 	"github.com/mia-clark/cloudflared-manager/internal/api"
 	"github.com/mia-clark/cloudflared-manager/internal/appcfg"
+	"github.com/mia-clark/cloudflared-manager/internal/cfdbin"
 	"github.com/mia-clark/cloudflared-manager/internal/eventbus"
 	"github.com/mia-clark/cloudflared-manager/internal/manager"
 	"github.com/mia-clark/cloudflared-manager/internal/metrics"
@@ -85,6 +86,12 @@ func runServe(args []string) int {
 		slog.String("version", version.Number),
 	)
 
+	binStore := cfdbin.New(cfg.BinariesDir)
+	binDl := &cfdbin.Downloader{
+		Mirrors:     cfg.DownloadMirrors,
+		GitHubToken: cfg.GitHubToken,
+	}
+
 	bus := eventbus.New(1024)
 	mgr, err := manager.New(manager.Options{
 		ProfilesDir: cfg.ProfilesDir,
@@ -93,6 +100,7 @@ func runServe(args []string) int {
 		MetaPath:    cfg.MetaFile,
 		Logger:      logger,
 		Bus:         bus,
+		BinaryStore: binStore,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "init manager: %v\n", err)
@@ -120,7 +128,14 @@ func runServe(args []string) int {
 		go sampler.Run(samplerCtx)
 	}
 
-	handler := api.NewRouter(api.Deps{Cfg: cfg, Logger: logger, Manager: mgr, Metrics: mstore})
+	handler := api.NewRouter(api.Deps{
+		Cfg:              cfg,
+		Logger:           logger,
+		Manager:          mgr,
+		Metrics:          mstore,
+		BinaryStore:      binStore,
+		BinaryDownloader: binDl,
+	})
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           handler,

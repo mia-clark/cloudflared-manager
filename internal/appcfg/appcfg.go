@@ -25,7 +25,20 @@ type Config struct {
 	// and defaults to true. Operators running immutable deployments can set
 	// it to false to disable in-place upgrades from the UI.
 	SelfUpdateEnabled bool
-	ShutdownWait      time.Duration
+	// BinariesDir is the root directory managed by cfdbin.Store.
+	// Defaults to {DataDir}/bin/cloudflared.
+	BinariesDir string
+	// DownloadMirrors is an ordered list of URL prefixes tried before
+	// hitting github.com directly. Comma-separated, may be empty.
+	DownloadMirrors []string
+	// GitHubToken is an optional GitHub personal-access-token used to
+	// raise the REST-API rate limit when fetching release metadata.
+	GitHubToken string
+	// CloudflaredDefaultVersion is the version string that /api/v1/binaries
+	// Install uses when the caller omits the "version" field.
+	// Default: "latest".
+	CloudflaredDefaultVersion string
+	ShutdownWait              time.Duration
 }
 
 // Load reads configuration from environment variables. Required fields
@@ -40,12 +53,17 @@ func Load() (*Config, error) {
 		DocsEnabled: parseBool(getEnv("CFDM_DOCS_ENABLED", "true"), true),
 
 		SelfUpdateEnabled: parseBool(getEnv("CFDM_SELF_UPDATE_ENABLED", "true"), true),
-		ShutdownWait:      10 * time.Second,
+
+		DownloadMirrors:           splitCSV(getEnv("CFDM_DOWNLOAD_MIRRORS", "https://gh-proxy.org/,https://gh-proxy.com/")),
+		GitHubToken:               os.Getenv("CFDM_GITHUB_TOKEN"),
+		CloudflaredDefaultVersion: getEnv("CFDM_CLOUDFLARED_DEFAULT_VERSION", "latest"),
+		ShutdownWait:              10 * time.Second,
 	}
 	cfg.ProfilesDir = cfg.DataDir + "/profiles"
 	cfg.LogsDir = cfg.DataDir + "/logs"
 	cfg.StoresDir = cfg.DataDir + "/stores"
 	cfg.MetaFile = cfg.DataDir + "/meta.json"
+	cfg.BinariesDir = getEnv("CFDM_BINARIES_DIR", cfg.DataDir+"/bin/cloudflared")
 
 	if cfg.APIToken == "" {
 		return nil, errors.New("CFDM_API_TOKEN is required")
@@ -55,7 +73,7 @@ func Load() (*Config, error) {
 
 // EnsureDirs creates the data subdirectories if they do not exist.
 func (c *Config) EnsureDirs() error {
-	for _, d := range []string{c.DataDir, c.ProfilesDir, c.LogsDir, c.StoresDir} {
+	for _, d := range []string{c.DataDir, c.ProfilesDir, c.LogsDir, c.StoresDir, c.BinariesDir} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return err
 		}
