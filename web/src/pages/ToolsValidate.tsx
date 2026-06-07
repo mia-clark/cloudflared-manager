@@ -96,7 +96,7 @@ const ToolsValidate: React.FC = () => {
         <Input.TextArea
           value={content}
           onChange={(e) => setContent(e.target.value)}
-          placeholder="例如：serverAddr = &quot;frp.example.com&quot; ..."
+          placeholder="粘贴 cloudflared 隧道 YAML，例如 edge.protocol / logging.logLevel / identity.label …"
           autoSize={{ minRows: 14, maxRows: 28 }}
           style={{
             fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
@@ -130,7 +130,7 @@ const ToolsValidate: React.FC = () => {
               showIcon
               icon={<CheckCircleOutlined />}
               message="配置完全合法"
-              description="该配置可以被 frps 正常加载。"
+              description="该配置可被 cloudflared 正常加载。"
               style={{ borderRadius: 10 }}
             />
           ) : (

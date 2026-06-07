@@ -13,7 +13,7 @@ interface ThemeContextValue {
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
-const STORAGE_KEY = 'frpsmgr_theme_mode';
+const STORAGE_KEY = 'cfdmgr_theme_mode';
 
 function readSystemPref(): 'light' | 'dark' {
   if (typeof window === 'undefined') return 'light';

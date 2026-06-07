@@ -4,14 +4,14 @@ import client from './client';
  * 版本检查响应 —— 字段逐字对齐后端 internal/api/update.go 的 Check handler。
  * 与 /api/v1/system/* 一致采用 snake_case。
  *
- * 必返字段：current / frp / deployment_mode / self_update_enabled /
+ * 必返字段：current / deployment_mode / self_update_enabled /
  *           has_update / can_self_update / reason
  * 仅成功时返回：latest / changelog / html_url / published_at
  * 仅失败时返回：check_error
+ * 注：cfdmgrd 自身版本是 current；cloudflared 二进制版本在「二进制管理」页。
  */
 export interface VersionCheckResp {
   current: string;
-  frp?: string;
   deployment_mode: string; // docker | systemd | openrc | launchd | windows-service | manual
   self_update_enabled: boolean;
   has_update: boolean;

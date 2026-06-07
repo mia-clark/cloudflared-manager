@@ -129,7 +129,7 @@ paths:
                   message: { type: string }
         "400": { $ref: "#/components/responses/BadRequest", description: 部署方式不支持自更新 }
         "403": { $ref: "#/components/responses/Error", description: Web 端自更新被禁用（CFDM_SELF_UPDATE_ENABLED=false） }
-        "409": { $ref: "#/components/responses/Conflict", description: 已是最新版本（可加 ?force=1） }
+        "409": { $ref: "#/components/responses/Conflict", description: "已是最新版本（可加 ?force=1）" }
         "502": { $ref: "#/components/responses/Error", description: 无法获取最新版本（上游失败） }
 
   /api/v1/configs:

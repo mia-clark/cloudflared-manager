@@ -31,7 +31,7 @@ const Settings: React.FC = () => {
   const { mode, setMode, resolved } = useTheme();
 
   const [autoCollapse, setAutoCollapse] = useState<boolean>(
-    () => localStorage.getItem('frpsmgr_sidebar_collapse') === '1'
+    () => localStorage.getItem('cfdmgr_sidebar_collapse') === '1'
   );
   const tokenMasked = (() => {
     const t = getAPIToken();
@@ -56,7 +56,7 @@ const Settings: React.FC = () => {
 
   const onToggleSidebar = (v: boolean) => {
     setAutoCollapse(v);
-    localStorage.setItem('frpsmgr_sidebar_collapse', v ? '1' : '0');
+    localStorage.setItem('cfdmgr_sidebar_collapse', v ? '1' : '0');
     message.success('已保存，下次刷新生效');
   };
 

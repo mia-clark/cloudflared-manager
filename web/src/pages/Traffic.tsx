@@ -1,8 +1,7 @@
 import { Empty, Card, Space, Typography, Alert } from 'antd';
 import { LineChartOutlined } from '@ant-design/icons';
 
-// PR-09b: cloudflared 指标曲线将在下一个 PR 重新接入。
-// 旧代码（frps metrics）已注释保留在 git 历史中（ad78730）。
+// cloudflared 指标曲线将在后续 PR 重新接入（历史实现保留在 git 历史中）。
 
 const { Title, Text } = Typography;
 

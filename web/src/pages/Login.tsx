@@ -237,7 +237,7 @@ const Login: React.FC = () => {
               <SafetyCertificateOutlined style={{ fontSize: 22, color: '#fff' }} />
             </div>
             <Text strong style={{ color: '#fff', fontSize: 17, letterSpacing: 0.5 }}>
-              FRPS Manager
+              Cloudflared Manager
             </Text>
           </div>
 
@@ -254,7 +254,7 @@ const Login: React.FC = () => {
                   letterSpacing: '-0.5px',
                 }}
               >
-                掌控你的 FRPS 服务端
+                掌控你的 cloudflared 隧道
                 <br />
                 <span
                   style={{
@@ -280,8 +280,8 @@ const Login: React.FC = () => {
                   display: 'block',
                 }}
               >
-                多实例并行托管、实时客户端 / 隧道 / 流量监控、历史曲线、可视化全参数表单、阈值告警 —
-                一个守护进程把所有 FRPS 服务端的运维都管起来。
+                多实例并行托管、实时日志 / 状态监控、历史指标、可视化 token + 参数编辑、阈值告警、
+                cloudflared 二进制版本管理 — 一个守护进程把所有 cloudflared 隧道的运维都管起来。
               </Text>
             </div>
 
@@ -309,7 +309,7 @@ const Login: React.FC = () => {
               }}
             >
               <ATypoLink
-                href="https://github.com/mia-clark/frps-manager"
+                href="https://github.com/mia-clark/cloudflared-manager"
                 target="_blank"
                 style={{ color: 'rgba(255,255,255,0.6)' }}
               >
@@ -394,7 +394,7 @@ const Login: React.FC = () => {
                   marginTop: 6,
                 }}
               >
-                请输入 <code style={{ fontSize: 12.5 }}>frpsmgrd</code> 守护进程的 API 令牌
+                请输入 <code style={{ fontSize: 12.5 }}>cfdmgrd</code> 守护进程的 API 令牌
               </Text>
             </div>
 

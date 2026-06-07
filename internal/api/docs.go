@@ -2,8 +2,11 @@ package api
 
 import (
 	_ "embed"
+	"encoding/json"
 	"net/http"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // openapiYAML is the OpenAPI 3.1 description shipped inside the daemon
@@ -95,15 +98,24 @@ func (h *DocsHandler) Spec(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(openapiYAML)
 }
 
-// SpecJSON serves the spec as JSON for tools that prefer it. Conversion
-// is intentionally minimal — for tools that need a strict JSON spec,
-// run `yq` or `openapi-to-json` on the YAML.
+// SpecJSON serves the spec converted to JSON for tools that require it.
+// On the (unexpected) event the embedded YAML fails to convert, it falls
+// back to serving the raw YAML so the endpoint never hard-fails.
 func (h *DocsHandler) SpecJSON(w http.ResponseWriter, r *http.Request) {
-	// Same content, different Content-Type. Most OpenAPI consumers accept YAML.
 	if !h.Enabled() {
 		http.NotFound(w, r)
 		return
 	}
+	w.Header().Set("Cache-Control", "no-cache")
+	var doc any
+	if err := yaml.Unmarshal(openapiYAML, &doc); err == nil {
+		if b, jerr := json.Marshal(doc); jerr == nil {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			_, _ = w.Write(b)
+			return
+		}
+	}
+	// Fallback: serve YAML if conversion failed for any reason.
 	w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
 	_, _ = w.Write(openapiYAML)
 }
