@@ -135,15 +135,25 @@ func Spawn(ctx context.Context, p SpawnParams) (*Worker, error) {
 	}
 
 	// Forward stdout + stderr to the sink. nil sink → discard.
+	//
+	// StdoutPipe/StderrPipe contract: cmd.Wait closes the pipes as soon as it
+	// sees the process exit, so reading MUST complete before Wait — otherwise
+	// the child's final log lines on exit get truncated. We therefore drain
+	// both copies (they return on pipe EOF, i.e. when the child exits) and
+	// only THEN call cmd.Wait.
 	sink := p.LogSink
 	if sink == nil {
 		sink = io.Discard
 	}
-	go func() { _, _ = io.Copy(sink, stdout) }()
-	go func() { _, _ = io.Copy(sink, stderr) }()
+	var copyWG sync.WaitGroup
+	copyWG.Add(2)
+	go func() { defer copyWG.Done(); _, _ = io.Copy(sink, stdout) }()
+	go func() { defer copyWG.Done(); _, _ = io.Copy(sink, stderr) }()
 
-	// Reaper: sole owner of cmd.Wait(). Close done when child exits.
+	// Reaper: sole owner of cmd.Wait(). Drains output, then reaps, then closes
+	// done so the manager's exit watcher only fires once all logs are captured.
 	go func() {
+		copyWG.Wait()
 		err := cmd.Wait()
 		w.mu.Lock()
 		w.exitErr = err
