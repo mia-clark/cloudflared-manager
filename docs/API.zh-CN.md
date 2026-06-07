@@ -1,13 +1,16 @@
-# frpsmgrd API 详细参考（frps 服务端管理器 · v1）
+# cloudflared-manager API 详细参考（cfdmgrd · v1）
 
-> ⚠️ **DEPRECATED**：本文档是 frps-manager 时代的 API 字段表，**与 v2.0.0
-> cloudflared-manager 的 API 已不兼容**。新 API 字段以
-> `internal/api/configs.go` / `internal/api/binaries.go` Go 源码
-> 为权威，前端类型定义见 `web/src/api/types.ts`。完整 OpenAPI 文档
-> 重写留待后续 PR。
-
-> 本文件依据当前 [`internal/api`](../internal/api/) 与 [`internal/manager`](../internal/manager/) 实地核对生成，覆盖路径、请求体、响应体、错误码的全部字段。
-> 凡是与 [`internal/api/openapi.yaml`](../internal/api/openapi.yaml) 不一致之处，请同步修复两者；正常情况下二者完全等价。
+> 本文件依据当前 [`internal/api`](../internal/api/)、[`internal/manager`](../internal/manager/)、
+> [`pkg/cfdconfig`](../pkg/cfdconfig/)、[`internal/metrics`](../internal/metrics/)、
+> [`internal/cfdbin`](../internal/cfdbin/) 的 Go 源码**实地核对**生成，覆盖路径、请求体、
+> 响应体、字段大小写与错误码。Go 源码为权威；凡与
+> [`internal/api/openapi.yaml`](../internal/api/openapi.yaml) 不一致之处，请同步修复两者。
+>
+> 这是一个 **无头的 cloudflared 连接器（token 模式）多实例管理器**：守护进程
+> `cfdmgrd` 把每个 cloudflared 连接器作为**独立子进程**拉起
+> （`cloudflared tunnel --no-autoupdate run`，token 由 `TUNNEL_TOKEN` 环境变量注入），
+> 通过 HTTP/JSON + WebSocket 暴露隧道 CRUD、生命周期、历史曲线、告警、日志、
+> 导入导出、系统监控与 cloudflared 二进制版本管理等管理面。
 
 ---
 
@@ -15,18 +18,17 @@
 
 | 项目 | 值 |
 |---|---|
-| 监听地址 | `FRPSMGR_HTTP_ADDR`，默认 `:8080` |
-| 数据目录 | `FRPSMGR_DATA_DIR`，默认 `/data`（子目录：`profiles/`、`logs/`、`stores/`、`meta.json`） |
-| 鉴权 | 除 `/api/v1/health` 与 `/api/docs/*` 外，所有 `/api/v1/*` 都要求 `Authorization: Bearer <FRPSMGR_API_TOKEN>` |
+| 监听地址 | `CFDM_HTTP_ADDR`，默认 `:8080` |
+| 数据目录 | `CFDM_DATA_DIR`，默认 `/var/lib/cfdmgrd`（Windows 为 `%ProgramData%\cfdmgrd`）。子目录：`profiles/`（每实例一个 `<id>.yaml`）、`logs/`（`<id>.log`）、`stores/`、`bin/cloudflared/`、`meta.json` |
+| 鉴权 | 除 `GET /api/v1/health` 与 `/api/docs/*` 外，所有 `/api/v1/*` 都要求 `Authorization: Bearer <CFDM_API_TOKEN>` |
 | Content-Type | 除特别说明（`/raw`、`/import/*`、`/validate`、`/export/*`、WS）外，**请求/返回均为 `application/json; charset=utf-8`** |
-| JSON 严格性 | 后端 `decodeJSON` 启用 `DisallowUnknownFields()`，请求体多带一个 key 直接 **`400`** |
+| JSON 严格性 | 后端 `decodeJSON` 启用 `DisallowUnknownFields()`，请求体多带一个未声明 key 直接 **`400`** |
 | 401 时机 | 缺失或错误 Bearer Token；前端拦截器会清理 token 并跳转 `/login` |
-| 路径 ID 限制 | 不允许路径分隔符与 shell 特殊字符（`/ \ : ? * < > | " '`），不能以 `.` 开头，长度 ≤ 64 |
-| WebSocket 子路径 | `/api/v1/events`、`/api/v1/configs/{id}/logs/tail` —— 浏览器无法自定义 WS Header，故支持 `?token=...` 查询参数；CORS 由 `FRPSMGR_CORS_ORIGINS` 控制 |
+| WebSocket 子路径 | `/api/v1/events`、`/api/v1/configs/{id}/logs/tail` —— 浏览器无法自定义 WS Header，故支持 `?token=...` 查询参数；CORS / Origin 由 `CFDM_CORS_ORIGINS` 控制 |
 
 ### 0.1 错误响应统一信封
 
-所有非 2xx 业务错误统一返回：
+所有非 2xx 业务错误统一返回（来源 [`apiresp/apiresp.go`](../internal/api/apiresp/apiresp.go)）：
 
 ```json
 {
@@ -42,40 +44,73 @@
 |---|---|---|
 | `bad_request` | 400 | 请求体 / 参数不合法 |
 | `unauthorized` | 401 | Token 缺失或无效 |
-| `forbidden` | 403 | 鉴权通过但禁止访问 |
-| `not_found` | 404 | 通用未找到 |
+| `forbidden` | 403 | 鉴权通过但禁止访问（如自更新被禁用） |
+| `not_found` | 404 | 通用未找到（如二进制版本未安装） |
 | `conflict` | 409 | 资源冲突 |
 | `validation_failed` | 400 | 业务校验失败 |
-| `internal_error` | 500 / 503 | 服务端异常 / 子系统未就绪（如度量存储禁用） |
+| `internal_error` | 500 / 503 | 服务端异常 / 子系统未就绪（如度量存储或二进制存储禁用返回 503） |
 | `config_not_found` | 404 | 实例 ID 不存在 |
 | `config_already_exists` | 409 | 实例 ID 已存在 |
-| `invalid_state` | 409 | 状态机违例（如未运行不能 reload、已运行不能 start） |
-| `upstream_failure` | 502 | 经 worker loopback 访问 frps 失败、远程下载失败 |
+| `invalid_state` | 400 / 409 | 状态机违例（如已运行不能 start、无法在当前部署模式下自更新） |
+| `upstream_failure` | 502 | 远程下载 / GitHub release 拉取 / 导入 URL 失败 |
 
 来源：[`apiresp/apiresp.go`](../internal/api/apiresp/apiresp.go)、[`errors.go`](../internal/api/errors.go)、[`helpers.go`](../internal/api/helpers.go)。
 
-### 0.2 关键架构事实（绑定字段前必须先看一眼）
+### 0.2 ⚠️ 大小写风格速查（本项目第一大坑）
 
-- **子进程模型**：每个运行中的 frps 都是父进程 re-exec 自身得到的独立子进程（`frps-worker`，见 [`cmd/frpsmgrd/frps_worker.go`](../cmd/frpsmgrd/frps_worker.go)）。原因是上游 `mem.StatsCollector` 是进程级全局单例，同进程跑多个 frps 会把所有实例流量混在一起、无法按实例分离。
-- **`webServer` 强制 loopback**：worker 启动前父进程预分配 `127.0.0.1:N` 空闲端口，强制覆盖 `webServer.addr/port/user/password`，账密随机；父进程通过该 loopback 反向读取 frps 原生 `/api/serverinfo`、`/api/proxy/{type}`、`/api/clients` 等运行时指标。**用户配置里的 `webServer` 字段会被忽略**，外部无法访问 frps 自身 dashboard，管理面统一走本守护进程的 HTTP API。
-- **reload = 重启**：frps 服务端参数没有 in-place 热重载语义。`POST .../reload` 的实现就是 `stop()` → `start()`（见 [`manager/instance.go#reload`](../internal/manager/instance.go)）。
-- **每实例独立日志**：`<FRPSMGR_DATA_DIR>/logs/<id>.log`，worker 的 stdout/stderr 全量落盘。`DELETE .../logs` 只更新 `log_view_since` 水位，不删盘上文件。
-- **配置数据模型分两种 JSON 命名风格（最大踩坑点）**：
-  - **业务配置（`config` 字段）= camelCase**：对应 [`pkg/config.ServerConfigV1`](../pkg/config/server.go)，内嵌上游 `github.com/fatedier/frp/pkg/config/v1.ServerConfig`，字段如 `bindPort` / `vhostHTTPPort` / `vhostHTTPSPort` / `kcpBindPort` / `quicBindPort` / `auth.method` / `transport.tcpMux` / `webServer.password` / `log.level` 等。
-  - **快照 / 元数据 / 事件 / 告警 / 流量 = snake_case**：`Snapshot`（`id` / `name` / `path` / `state` / `last_error` / `started_at` / `stopped_at`），`TrafficPoint`、`AlertRule`、`AlertEvent`、WS `Event` 全部 snake_case。
-  - **管理器元数据（`frpsmgr` 字段）= camelCase**：[`manager.MgrMeta`](../internal/manager/manager.go) 只有 `name` 与 `manualStart` 两个字段，不写入 frps TOML，落 `meta.json`。
-- **`/runtime/*` 是 frps 原生 JSON 透传**：守护进程经 worker loopback 代理 frps 原生 `/api/serverinfo`、`/api/proxy/{type}`、`/api/proxies/{name}`、`/api/clients` 后**原样回写**响应体；字段形态以 frps 上游为准（**camelCase**），不是本项目 Snapshot 的 snake_case 风格。
+两套 JSON 命名风格并存，**写错 key 时 Go 的 `encoding/json` 大小写不敏感会静默写成功、回读拿不到**，必须看准：
 
-### 0.3 配置环境变量（[`internal/appcfg`](../internal/appcfg/appcfg.go)）
+| 子树 / 对象 | 命名风格 | 来源 |
+|---|---|---|
+| `config`（业务隧道配置）= `TunnelConfigV1` | **camelCase** | [`pkg/cfdconfig/tunnel.go`](../pkg/cfdconfig/tunnel.go) |
+| `cfdmgr`（管理器元数据）= `MgrMeta` | **camelCase**（`name` / `manualStart`） | [`manager/manager.go`](../internal/manager/manager.go) |
+| `Snapshot`（运行时状态） | **snake_case**（`log_path` / `last_error` / `started_at` / `metrics_port`） | [`manager/instance.go`](../internal/manager/instance.go) |
+| 告警 `AlertRule` / `AlertEvent` | **snake_case**（`inst_id` / `for_seconds` / `rule_id` / `fired_at`） | [`metrics/store_alerts.go`](../internal/metrics/store_alerts.go) |
+| 二进制 `BinaryItem`（List）/ `AvailableRelease` / `VersionMeta`（Install） | **snake_case**（`source_url` / `is_active` / `tag_name` / `published_at` / `downloaded_at`） | [`cfdbin/store.go`](../internal/cfdbin/store.go)、[`cfdbin/download.go`](../internal/cfdbin/download.go) |
+| 系统监控 `/system/*` | **snake_case** | [`internal/sysinfo`](../internal/sysinfo/) |
+| WS `Event` 外层信封 | **snake_case**（`config_id`） | [`eventbus/types.go`](../internal/eventbus/types.go) |
+| 历史流量曲线 `points[]` | **snake_case** 外层；点内为 `ts/in/out/conns` | [`internal/api/metrics.go`](../internal/api/metrics.go) |
+
+> `TunnelConfigV1` 内部还有沿用 cloudflared 习惯的不规则 camelCase：`edgeIpVersion`（不是 `edgeIPVersion`）、`edgeBindAddress`、`logLevel`、`transportLogLevel`、`postQuantum`、`advancedEnvOverrides`、`binaryVersion`、`gracePeriod`。
+
+### 0.3 ⚠️ token（连接器令牌）写入语义（务必读完）
+
+cloudflared 连接器 token 高度敏感（即整条隧道的凭据）。后端对它的处理：
+
+- **响应永不回传明文**：所有返回 `ConfigEnvelope` 的端点（`GET/POST/PUT/PATCH /configs`、`/duplicate`、`/import/*`、`/raw` 的 PUT 等）都会把 `config.token` 剥离为 `""`，仅通过 `has_token`（bool）告知是否已存。见 [`configs.go: newEnvelope`](../internal/api/configs.go)。
+- **`PUT /configs/{id}` 留空 = 保留现有**：因为响应不回传 token，前端编辑表单提交空 token 表示「不动现有令牌」；只有显式传入非空 token 才会覆盖。
+- **`POST /configs/{id}/duplicate` 不复制 token**：副本 token 置空，需另行写入。
+- **掩码预览**：`GET /configs/{id}/token` 返回 `{has_token, masked, length}`，`masked` 形如 `abcd••••••••wxyz`（首 4 + 圆点 + 末 4；长度 ≤ 8 全圆点），不可逆。
+- **唯一能读到明文的端点是 `GET /configs/{id}/raw`**：它返回磁盘 YAML 原文（含 token），属于敏感操作，前端默认不暴露。
+- **清空 token**：通过 `PUT /configs/{id}/raw` 写入不含 `token:` 的 YAML 完成（power-user 操作）。
+
+### 0.4 ⚠️ traffic 三列是计数，不是字节
+
+cloudflared 没有 per-tunnel 字节计数器，只暴露 Prometheus 指标。`GET /metrics/{id}/traffic` 的 `points[]` 中：
+
+- `in` = **请求数增量**（区间内新增请求计数，不是流入字节）
+- `out` = **错误数增量**（区间内新增错误计数，不是流出字节）
+- `conns` = **当前 HA 连接数**（cloudflared 与边缘建立的高可用连接条数，非字节、非累计）
+
+前端展示与告警阈值都要按「计数 / 速率」语义理解，切勿当作带宽。
+
+### 0.5 配置环境变量（[`internal/appcfg/appcfg.go`](../internal/appcfg/appcfg.go)）
+
+前缀统一为 `CFDM_`：
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `FRPSMGR_API_TOKEN` | （必填） | API 鉴权令牌 |
-| `FRPSMGR_HTTP_ADDR` | `:8080` | 监听地址 |
-| `FRPSMGR_DATA_DIR` | `/data` | 数据根目录 |
-| `FRPSMGR_CORS_ORIGINS` | `*` | CORS 白名单（CSV） |
-| `FRPSMGR_LOG_LEVEL` | `info` | trace/debug/info/warn/error |
-| `FRPSMGR_DOCS_ENABLED` | `true` | 是否挂载 `/api/docs/*` |
+| `CFDM_API_TOKEN` | （必填） | API 鉴权令牌，缺失则启动失败 |
+| `CFDM_HTTP_ADDR` | `:8080` | 监听地址 |
+| `CFDM_DATA_DIR` | `/var/lib/cfdmgrd` | 数据根目录（Windows 默认 `%ProgramData%\cfdmgrd`） |
+| `CFDM_CORS_ORIGINS` | `*` | CORS / WS Origin 白名单（CSV） |
+| `CFDM_LOG_LEVEL` | `info` | trace/debug/info/warn/error |
+| `CFDM_DOCS_ENABLED` | `true` | 是否挂载 `/api/docs/*` |
+| `CFDM_SELF_UPDATE_ENABLED` | `true` | 是否允许 Web 端一键自更新守护进程 |
+| `CFDM_DOWNLOAD_MIRRORS` | `https://gh-proxy.org/,https://gh-proxy.com/` | 下载 cloudflared 二进制时优先尝试的镜像前缀（CSV） |
+| `CFDM_GITHUB_TOKEN` | （空） | 拉取 GitHub release 元数据时的 PAT，用于抬高速率限制 |
+| `CFDM_BINARIES_DIR` | `{DATA_DIR}/bin/cloudflared` | cloudflared 二进制存储根目录 |
+| `CFDM_CLOUDFLARED_DEFAULT_VERSION` | `latest` | `POST /binaries/install` 省略 version 时的回退目标 |
 
 ---
 
@@ -94,852 +129,574 @@
 需要鉴权。返回 `200`：
 
 ```json
-{ "daemon": "1.2.23", "frp": "0.69.1", "build_date": "unknown" }
+{ "daemon": "2.0.0", "build_date": "2026-06-08T00:00:00Z" }
 ```
 
-`daemon`、`build_date` 由构建期 `-ldflags` 注入；`frp` 取自 `github.com/fatedier/frp/pkg/util/version.Full()`。
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `daemon` | string | 守护进程版本，构建期 `-ldflags` 注入 |
+| `build_date` | string | 构建时间，构建期注入（缺省 `unknown`） |
 
-### 1.3 `GET /api/v1/version/check` — 检查最新版本
+> cloudflared 二进制版本不在此处，请查 `GET /api/v1/binaries`。
 
-查询 GitHub 最新 release 并与当前版本对比。后端结果缓存约 1 小时；传 `?force=1` 绕过缓存。
-字段为 **snake_case**（与 `/api/v1/system/*` 一致）。
+### 1.3 `GET /api/v1/version/check` — 检查 daemon 最新版本
+
+查询 GitHub 最新 release 并与当前版本对比，后端结果缓存约 1 小时；传 `?force=1`（或 `?refresh=1`）绕过缓存。字段为 **snake_case**。
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `current` | string | 当前 daemon 版本 |
-| `frp` | string | 内嵌 frp 版本 |
 | `deployment_mode` | string | `docker` / `systemd` / `openrc` / `launchd` / `windows-service` / `manual` |
-| `self_update_enabled` | bool | 是否允许 Web 端自更新（`FRPSMGR_SELF_UPDATE_ENABLED`） |
-| `has_update` | bool | 是否有更新版本 |
-| `can_self_update` | bool | 该部署是否支持一键更新（Docker / 手动运行为 false） |
+| `self_update_enabled` | bool | 是否允许 Web 端自更新（`CFDM_SELF_UPDATE_ENABLED`） |
+| `has_update` | bool | 是否存在更新版本 |
+| `can_self_update` | bool | 该部署「能力上」是否支持一键更新（部署模式支持 **且** 管理员启用）；前端再与 `has_update` 组合决定按钮是否可点 |
 | `reason` | string | 不可更新或被禁用时的说明，正常为空串 |
 | `latest` | string? | 最新版本 tag（仅查询成功时返回） |
-| `changelog` | string? | release 正文（Markdown，仅成功时返回） |
+| `changelog` | string? | release 正文 Markdown（仅成功时返回） |
 | `html_url` | string? | release 页面链接（仅成功时返回） |
 | `published_at` | string? | 发布时间（仅成功时返回） |
 | `check_error` | string? | 查询失败时的错误信息（仅失败时返回） |
 
-```json
-{
-  "current": "1.2.23", "frp": "0.69.1", "deployment_mode": "systemd",
-  "self_update_enabled": true, "has_update": true, "can_self_update": true,
-  "reason": "", "latest": "v1.2.32", "changelog": "## 修复\n- ...",
-  "html_url": "https://github.com/mia-clark/frps-manager/releases/tag/v1.2.32",
-  "published_at": "2026-06-06T00:00:00Z"
-}
-```
+### 1.4 `POST /api/v1/system/update` — 一键自更新守护进程
 
-### 1.4 `POST /api/v1/system/update` — 一键更新并重启
+触发分离式（detached）在线升级并立即返回 `202`，随后守护进程会被替换并重启；客户端应轮询 `/health` + `/version` 直到版本变化。传 `?force=1` 可在已是最新时强制重装。
 
-启动一个**脱离进程**下载最新版、替换二进制并重启服务，立即返回 `202`。客户端随后轮询
-`/api/v1/version` 直到 `daemon` 变化即视为完成。受 `FRPSMGR_SELF_UPDATE_ENABLED` 开关控制，
-且仅对服务化部署可用（Docker / 手动运行会被拒绝）。传 `?force=1` 可在已是最新时强制重装。
-
-| 状态码 | 含义 |
-|---|---|
-| `202` | 更新已开始，服务即将重启；body 含 `{status, from, to, message}` |
-| `403` | 管理员已禁用 Web 端自更新 |
-| `400` | 当前部署方式不支持一键更新（Docker / 手动） |
-| `409` | 已是最新版本（未带 `force=1`） |
-| `502` | 无法获取最新版本（网络受限等） |
+成功 `202`：
 
 ```json
-{ "status": "updating", "from": "1.2.23", "to": "v1.2.32", "message": "更新已开始，服务即将重启，请稍候…" }
+{ "status": "updating", "from": "2.0.0", "to": "2.0.1", "message": "更新已开始，服务即将重启，请稍候…" }
 ```
-
-### 1.5 `/api/docs/*` — 内嵌 API 文档（默认开启，无需鉴权）
-
-| 路径 | 说明 |
-|---|---|
-| `GET /api/docs` | 301 → `/api/docs/` |
-| `GET /api/docs/` | Scalar UI（HTML） |
-| `GET /api/docs/openapi.yaml` | 内嵌 OpenAPI 3.1 Spec（YAML） |
-| `GET /api/docs/openapi.json` | 同上（Content-Type 不同，主体仍为 YAML 文本） |
-
-`FRPSMGR_DOCS_ENABLED=false` 可整片下线。
-
----
-
-## 2. 实例配置（Configs）
-
-> 实例 ID = 磁盘上 `<profiles_dir>/<id>.toml` 的文件名去后缀。Manager 在内存保留实例对象，每次 `GET` 时**从磁盘重新解析** TOML（避免 in-memory 漂移），见 [`manager.Manager#Get`](../internal/manager/manager.go)。
-
-### 2.1 `GET /api/v1/configs` — 列出全部实例
-
-无请求体。返回 `200`：
-
-```json
-{
-  "items": [
-    {
-      "id": "edge-tokyo",
-      "name": "edge-tokyo",
-      "path": "/data/profiles/edge-tokyo.toml",
-      "state": "started",
-      "started_at": "2026-06-05T12:30:11+08:00"
-    }
-  ]
-}
-```
-
-`Snapshot` 字段（[`instance.go#Snapshot`](../internal/manager/instance.go)，**snake_case**）：
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `id` | string | 实例 ID |
-| `name` | string | 用户备注名（来自 `meta.json`），空时回填为 `id` |
-| `path` | string | TOML 绝对路径 |
-| `state` | string | `started` / `stopped` / `starting` / `stopping` / `unknown` |
-| `last_error` | string | 最近一次错误，`omitempty` |
-| `started_at` | RFC3339 | 启动时间，未启动则不出现 |
-| `stopped_at` | RFC3339 | 停止时间，从未启动过则不出现 |
-
-排序：先按 `meta.json` 中 `sort` 顺序，未出现的 ID 追加在末尾并按 ID 字典序排列。
-
-### 2.2 `POST /api/v1/configs` — 新建实例
-
-请求体：
-
-```json
-{
-  "id": "edge-tokyo",
-  "config": {
-    "bindPort": 7000,
-    "vhostHTTPPort": 8080,
-    "auth": { "method": "token", "token": "abc" },
-    "log": { "level": "info" }
-  },
-  "frpsmgr": { "name": "Tokyo Edge", "manualStart": false }
-}
-```
-
-| 字段 | 类型 | 必填 | 说明 |
-|---|---|---|---|
-| `id` | string | √ | 实例 ID |
-| `config` | object | √ | `ServerConfigV1`，见 §11 |
-| `frpsmgr` | object | × | `{name, manualStart}`，缺省时 `name` 回填 ID、`manualStart=false` |
-
-后端会：
-1. 校验 ID。
-2. `sc.Complete()` 把上游默认值填回 config（如 `bindAddr=0.0.0.0`、`heartbeatTimeout=90`）。
-3. `MarshalTOML()` 写盘（JSON 桥确保 key 为 camelCase）。
-4. 写 `meta.json`（name / manualStart / sort）。
-5. 不自动启动 — 用 §3.1 显式启动。
-
-返回 `201` + [`ConfigEnvelope`](#27-configenvelope-响应信封)。  
-冲突 → `409 / config_already_exists`；缺少 `id`/`config` → `400 / bad_request`。
-
-### 2.3 `GET /api/v1/configs/{id}` — 取单个实例
-
-无请求体。返回 `200` + `ConfigEnvelope`（Snapshot snake_case + `config` camelCase + `frpsmgr` camelCase）。
-
-不存在 → `404 / config_not_found`。
-
-### 2.4 `PUT /api/v1/configs/{id}` — 整体替换
-
-请求体：
-
-```json
-{
-  "config": { "bindPort": 7000, "...": "..." },
-  "frpsmgr": { "name": "新名字", "manualStart": true }
-}
-```
-
-| 字段 | 必填 | 说明 |
-|---|---|---|
-| `config` | √ | 完整 `ServerConfigV1` |
-| `frpsmgr` | × | 缺省时不变 |
-
-后端 `Complete() → MarshalTOML() → 原子写盘 → meta 更新 → 若 `state=started` 则自动 reload（= restart）`。
-
-返回 `200` + `ConfigEnvelope`；`config` 缺失 → `400`；不存在 → `404`。
-
-### 2.5 `PATCH /api/v1/configs/{id}` — RFC 7396 Merge Patch
-
-请求体 ≤ 1 MiB；**不走 `decodeJSON`**（不会因未知 key 直接 400）。  
-逻辑：当前 `ServerConfigV1` JSON → 与 patch 做对象合并（`null` 删除该键）→ 重新解析到 `ServerConfigV1` → 写盘。
-
-示例（只改日志级别）：
-
-```json
-{ "log": { "level": "debug" } }
-```
-
-`frpsmgr` 不在 patch 顶层时保持不变。运行中实例会自动 restart。
-
-### 2.6 `DELETE /api/v1/configs/{id}` — 删除
-
-无请求体。流程：`stop()` → `os.Remove(<path>)` → 清理 meta.json 中对应 ID → 触发 `config.deleted` 事件。返回 `204`。
-
-不存在 → `404`。
-
-### 2.7 `POST /api/v1/configs/{id}/duplicate` — 克隆
-
-```json
-{ "new_id": "edge-tokyo-copy" }
-```
-
-复制 `config` 与 `frpsmgr`（含 `manualStart`）。返回 `201` + 新 `ConfigEnvelope`。
-
-冲突 → `409`；缺 `new_id` → `400`。
-
-### 2.8 `POST /api/v1/configs/reorder` — 持久化展示顺序
-
-```json
-{ "order": ["edge-tokyo", "edge-osaka", "edge-seoul"] }
-```
-
-未知 ID 静默丢弃。返回 `204`。
-
-### 2.9 `GET /api/v1/configs/{id}/raw` — 读取原始 TOML
-
-`Content-Type: application/toml`，body 为字节流，直接 `os.ReadFile`。
-
-### 2.10 `PUT /api/v1/configs/{id}/raw` — 写入原始 TOML
-
-请求体 ≤ 4 MiB，`Content-Type: application/toml` 或 `text/plain`。  
-后端 `ParseServerTOML()` 解析校验 → 原子写盘 → 运行中自动 restart。返回 `200` + `ConfigEnvelope`。
-
-解析失败 → `400 / bad_request`（`message` 含 `parse: ...`）。
-
-### 2.11 `ConfigEnvelope` 响应信封
-
-```jsonc
-{
-  // ----- Snapshot 顶层（snake_case）-----
-  "id": "edge-tokyo",
-  "name": "Tokyo Edge",
-  "path": "/data/profiles/edge-tokyo.toml",
-  "state": "started",
-  "started_at": "2026-06-05T12:30:11+08:00",
-
-  // ----- 完整 ServerConfigV1（camelCase，见 §11）-----
-  "config": { "bindPort": 7000, "vhostHTTPPort": 8080, "auth": { "method": "token", "token": "abc" } },
-
-  // ----- 管理器元数据（camelCase）-----
-  "frpsmgr": { "name": "Tokyo Edge", "manualStart": false }
-}
-```
-
----
-
-## 3. 生命周期
-
-| 路径 | 方法 | 行为 | 成功返回 |
-|---|---|---|---|
-| `/api/v1/configs/{id}/start` | POST | 启动实例 | `200` + Snapshot |
-| `/api/v1/configs/{id}/stop` | POST | 停止实例（已停止幂等成功） | `200` + Snapshot |
-| `/api/v1/configs/{id}/reload` | POST | **重启**实例（= stop + start） | `200` + Snapshot |
-| `/api/v1/configs/{id}/status` | GET | 取当前 Snapshot | `200` + Snapshot |
 
 错误：
 
-- 不存在 → `404 / config_not_found`。
-- 启动已运行实例 → `409 / invalid_state`：`"already running"`。
-- 停止已停止实例 → 仍 `200`（无副作用）。
-- reload 时 `start()` 失败 → `400 / invalid_state`。
-
-`reload` 对 frps 等价于 `stop()+start()`，因为 frps 服务端参数（bindPort、vhost*、auth、tls 等）必须新建进程才能生效；本守护进程不再假装"在线热加载"。
-
----
-
-## 4. 校验
-
-### 4.1 `POST /api/v1/validate` — 校验配置但不落盘
-
-请求体 ≤ 4 MiB。
-
-| 请求 Content-Type | 请求体形态 |
-|---|---|
-| `application/json` | `ServerConfigV1` 对象 |
-| 其它（`application/toml`、`text/plain` 等） | 原始 frps TOML 文本 |
-
-后端：解析 → `Complete()` → `validation.ValidateServerConfig()`。**无论合法与否都返回 `200`**，结果在 body：
-
-```json
-{ "valid": true }
-```
-
-```json
-{ "valid": true, "warnings": ["xxx is deprecated"] }
-```
-
-```json
-{ "valid": false, "errors": ["bindPort: required"] }
-```
+| HTTP | code | 触发 |
+|---|---|---|
+| `403` | `forbidden` | `CFDM_SELF_UPDATE_ENABLED=false` |
+| `400` | `invalid_state` | 当前部署模式不支持自更新（如 docker / 手动运行） |
+| `409` | `conflict` | 已是最新版本且未带 `?force=1` |
+| `502` | `upstream_failure` | 无法获取最新版本（GitHub 拉取失败） |
 
 ---
 
-## 5. 运行时监控（`/runtime/*`）
+## 2. 隧道配置 CRUD（`config` 子树 = camelCase）
 
-> ⚠️ **重要**：`/runtime/*` 端点是守护进程经 worker loopback **代理 frps 原生 API 后透传响应**。响应 JSON 的字段形态以上游 frps 为准（**camelCase**），不是本项目 Snapshot snake_case 风格。
->
-> 后端实现见 [`internal/api/runtime.go`](../internal/api/runtime.go)：父进程通过 `manager.Loopback(id)` 拿到子进程随机绑定的 `127.0.0.1:N` 与随机账密，发起 HTTP Basic 请求，把响应体原样回写。
+业务配置对象为 [`TunnelConfigV1`](../pkg/cfdconfig/tunnel.go)，**全 camelCase**，YAML（落盘）与 JSON（API）共用同一组 tag。
 
-通用错误：
+### 2.1 `TunnelConfigV1` 字段表
 
-- 实例不存在 → `404 / config_not_found`。
-- 实例未运行 → `409 / invalid_state`：`"instance is not running"`。
-- worker loopback 不通 / frps 返回非 200 → `502 / upstream_failure`。
-
-### 5.1 `GET /api/v1/runtime/{id}/overview` — 实例总览
-
-透传 frps 原生 `/api/serverinfo`。响应（**camelCase**）：
-
-```jsonc
-{
-  "version": "0.69.1",
-  "bindPort": 7000,
-  "vhostHTTPPort": 8080,
-  "vhostHTTPSPort": 8443,
-  "kcpBindPort": 7000,
-  "quicBindPort": 7001,
-  "subdomainHost": "frps.example.com",
-  "maxPoolCount": 5,
-  "maxPortsPerClient": 0,
-  "heartbeatTimeout": 90,
-  "totalTrafficIn": 102400000,
-  "totalTrafficOut": 51200000,
-  "curConns": 12,
-  "clientCounts": 3,
-  "proxyTypeCount": { "tcp": 5, "http": 2, "udp": 1 }
-}
-```
-
-字段以上游 [`fatedier/frp@v0.69.1/server/dashboard_api.go`](https://github.com/fatedier/frp/blob/v0.69.1/server/dashboard_api.go) 为准；新版本可能新增字段，前端应防御式解析。
-
-### 5.2 `GET /api/v1/runtime/{id}/proxies` — 全部代理（聚合）
-
-守护进程顺次调 frps `/api/proxy/{tcp,udp,http,https,stcp,sudp,xtcp,tcpmux}` 并把每个 `proxies` 数组拼成一个扁平列表。响应（**camelCase**）：
-
-```jsonc
-{
-  "proxies": [
-    {
-      "name": "ssh-cn",
-      "type": "tcp",
-      "conf": {
-        "name": "ssh-cn",
-        "type": "tcp",
-        "remotePort": 6000,
-        "transport": { "useEncryption": true }
-      },
-      "clientVersion": "0.69.1",
-      "lastStartTime": "2026-06-05 12:00:00",
-      "lastCloseTime": "2026-06-05 11:55:00",
-      "status": "online",
-      "todayTrafficIn": 102400,
-      "todayTrafficOut": 51200,
-      "curConns": 3
-    }
-  ]
-}
-```
-
-注意：聚合过程对**单个类型失败**容错（仅第一个类型失败才会向上抛 502），其余继续累加。
-
-### 5.3 `GET /api/v1/runtime/{id}/proxies/{name}` — 单条代理详情
-
-透传 frps 原生 `/api/proxies/{name}`。响应形态以上游为准，建议**防御式解析**。常见字段：
-
-```jsonc
-{
-  "name": "ssh-cn",
-  "type": "tcp",
-  "conf": { "remotePort": 6000, "transport": { "useEncryption": true } },
-  "clientVersion": "0.69.1",
-  "lastStartTime": "2026-06-05 12:00:00",
-  "lastCloseTime": "2026-06-05 11:55:00",
-  "status": "online",
-  "todayTrafficIn": 102400,
-  "todayTrafficOut": 51200,
-  "curConns": 3,
-  "err": ""
-}
-```
-
-代理不存在时上游返回 404，守护进程会把它包成 `502 / upstream_failure: frps loopback /api/proxies/{name} returned 404`。前端按 502 处理即可。
-
-### 5.4 `GET /api/v1/runtime/{id}/clients` — 当前活跃 frpc 客户端
-
-透传 frps 原生 `/api/clients`。响应（**camelCase**，shape 以上游为准）：
-
-```jsonc
-{
-  "clients": [
-    {
-      "id": "abc123",
-      "user": "edge-tokyo",
-      "version": "0.69.1",
-      "hostname": "edge-tokyo",
-      "os": "linux",
-      "arch": "amd64",
-      "lastStartTime": "2026-06-05 12:00:00",
-      "runId": "..."
-    }
-  ]
-}
-```
-
----
-
-## 6. 历史流量（`/metrics/*`）
-
-后端：每个 frps worker 每分钟被采样一次（流入/流出字节差、当前连接数），写入 SQLite `traffic_points` 表。详见 [`internal/metrics/store.go`](../internal/metrics/store.go) 与 [`internal/metrics/sampler.go`](../internal/metrics/sampler.go)。
-
-**度量存储未启用或不可用** → `503 / internal_error`：`"metrics store disabled"`。
-
-### 6.1 `GET /api/v1/metrics/{id}/traffic` — 单实例历史流量曲线
-
-Query 参数：
-
-| 名称 | 类型 | 默认 | 说明 |
+| 字段（路径） | 类型 | 取值 / 约束 | 说明 |
 |---|---|---|---|
-| `scope` | string | `server` | `server` = 实例总量；`proxy` = 单条代理 |
-| `key` | string | `""` | 当 `scope=proxy` 时填代理名 |
-| `from` | int64（Unix 秒） | 0 | 0 = 不下界 |
-| `to` | int64（Unix 秒） | （必填） | **缺失 → 400 / bad_request** |
-| `step` | int64（秒） | 60 | 桶大小，最小 1 |
+| `token` | string | 长度 [100,1500]，base64 字符集；空 = 未配置（草稿允许） | 连接器令牌。**响应永不回传，详见 §0.3** |
+| `edge.protocol` | string | `auto`(默认) / `http2` / `quic` | cloudflared ↔ 边缘传输协议 |
+| `edge.edgeIpVersion` | string | `auto` / `4` / `6`；空 = 上游默认（4） | 拨号边缘的 IP 族（注意是 `edgeIpVersion`） |
+| `edge.edgeBindAddress` | string | 不含空白字符 | 出站边缘连接的本地源 IP，IP 族会覆盖 `edgeIpVersion` |
+| `edge.region` | string | `""`(全局) / `us` | 限定边缘路由区域 |
+| `edge.postQuantum` | bool | 仅当 `protocol == "quic"` 时有效 | 强制后量子密钥交换；与非 quic 组合会被校验拒绝 |
+| `reliability.retries` | int | [0,20]，0 = 用 cloudflared 默认(5) | 连接 / 协议重试上限 |
+| `reliability.gracePeriod` | string | Go duration，范围 [1s,5m]，如 `"30s"` | 收到停止信号后等待在途请求完成的时长 |
+| `logging.logLevel` | string | `debug` / `info` / `warn` / `error` / `fatal`；空 = 默认 | 应用级日志等级 |
+| `logging.transportLogLevel` | string | 同上 | QUIC/HTTP2 传输层日志等级 |
+| `identity.label` | string | ≤64，字符集 `[A-Za-z0-9_\-. ]` | 连接器显示名（cloudflared 无对应 env，启动时经 argv 透传） |
+| `identity.tags` | map[string]string | key 匹配 `[A-Za-z_][A-Za-z0-9_]*` 且 ≤32，value ≤128 | 上报到 Zero Trust 面板的注解集 |
+| `advancedEnvOverrides` | map[string]string | key 匹配 `^[A-Z][A-Z0-9_]*$`，且不得为保留键 | cloudflared 未建模 env 的逃生舱；保留键（`TUNNEL_TOKEN`/`NO_AUTOUPDATE`/`AUTOUPDATE_FREQ`/`TUNNEL_METRICS`/`TUNNEL_OUTPUT`/`TUNNEL_LOGFILE`/`TUNNEL_LOGDIRECTORY`）禁止覆盖 |
+| `binaryVersion` | string | 空 / `current` = 跟随全局活跃版本；或具体 tag（如 `2026.5.2`） | 为该实例钉住 cloudflared 二进制版本 |
 
-返回（**snake_case**）：
+> 公共主机名 / ingress / 源站配置全部在 Cloudflare Zero Trust 面板维护，**不**由本模型管理。
+
+### 2.2 `MgrMeta`（`cfdmgr` 子树 = camelCase）
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `name` | string | 实例显示名 |
+| `manualStart` | bool | true 则守护进程启动时不自动拉起该实例 |
+
+### 2.3 `Snapshot`（运行时状态 = snake_case）
+
+来源 [`manager/instance.go`](../internal/manager/instance.go)。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | string | 实例 ID（= 配置文件名去扩展名） |
+| `name` | string | 显示名（由 meta.json 注入） |
+| `path` | string | 磁盘配置文件绝对路径（`.yaml`） |
+| `log_path` | string | 日志文件路径（由 LogsDir 注入） |
+| `state` | string | `stopped` / `starting` / `started` / `stopping` |
+| `last_error` | string? | 最近一次错误（无则省略） |
+| `started_at` | string? | 最近一次启动时间（RFC3339，未启动则省略） |
+| `stopped_at` | string? | 最近一次停止时间（省略同上） |
+| `binary_version` | string? | 该实例当前使用的 cloudflared 版本 |
+| `pid` | int? | 子进程 PID，0 / 省略表示未运行 |
+| `metrics_port` | int? | 分配给该实例的本地 metrics 端口（CRC32 哈希落于 [20241,20998]） |
+
+### 2.4 `ConfigEnvelope`（多数 config 端点的响应体）
+
+= `Snapshot` 的全部字段（平铺）+ 以下三项：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `config` | `TunnelConfigV1` | 业务配置，**`token` 已脱敏为 `""`** |
+| `cfdmgr` | `MgrMeta` | 管理器元数据 |
+| `has_token` | bool | 是否已存储非空 token |
+
+### 2.5 端点
+
+#### `GET /api/v1/configs` — 列出全部实例
+
+返回 `200`：`{ "items": Snapshot[] }`（按用户排序）。注意 **列表项只是 Snapshot，不含 `config` 业务字段**；回填编辑表单需另取 `GET /configs/{id}`。
+
+#### `POST /api/v1/configs` — 创建
+
+请求体：
+
+```json
+{ "id": "my-tunnel", "config": { "token": "<base64...>", "edge": { "protocol": "auto" } }, "cfdmgr": { "name": "我的隧道", "manualStart": false } }
+```
+
+- `id` 与 `config` 必填，缺失返回 `400`。
+- 成功 `201` 返回 `ConfigEnvelope`（token 已脱敏）。
+- ID 已存在返回 `409 config_already_exists`。
+
+#### `POST /api/v1/configs/reorder` — 保存显示顺序
+
+请求体 `{ "order": ["id-a", "id-b", ...] }` → `204`。
+
+#### `GET /api/v1/configs/{id}` — 取单个实例（回填编辑表单用）
+
+返回 `200` `ConfigEnvelope`；`config.token` 永远为 `""`，凭 `has_token` 判断是否已存。不存在返回 `404 config_not_found`。
+
+#### `PUT /api/v1/configs/{id}` — 全量替换
+
+请求体 `{ "config": TunnelConfigV1, "cfdmgr": MgrMeta }`（`config` 必填）。
+
+- **`config.token` 留空 = 保留现有 token**；非空才覆盖（详见 §0.3）。
+- 成功 `200` 返回 `ConfigEnvelope`。
+
+#### `PATCH /api/v1/configs/{id}` — 合并修改（RFC 7396）
+
+请求体为对 `TunnelConfigV1` 的 JSON Merge-Patch（`Content-Type: application/json`，注意仍是 camelCase 字段）。`null` 值删除对应键；嵌套对象递归合并。成功 `200` 返回 `ConfigEnvelope`。
+
+> Patch 基于当前磁盘配置（含明文 token）合并，因此 patch 不带 token 时 token 不变。
+
+#### `DELETE /api/v1/configs/{id}` — 删除
+
+停止并删除实例 → `204`。
+
+#### `POST /api/v1/configs/{id}/duplicate` — 复制
+
+请求体 `{ "new_id": "copy-1" }`（必填）。成功 `201` 返回新实例 `ConfigEnvelope`。**副本不复制 token**（置空）。
+
+#### `GET /api/v1/configs/{id}/raw` — 磁盘 YAML 原文（敏感）
+
+返回 `text/yaml`（`Content-Type: application/yaml`），**含明文 token**。前端默认不暴露。
+
+#### `PUT /api/v1/configs/{id}/raw` — 覆盖磁盘 YAML
+
+请求体为 cloudflared 风格 YAML 原文（`Content-Type` 任意，按 YAML 解析）。成功 `200` 返回 `ConfigEnvelope`。可用于清空 token（写入不含 `token:` 的 YAML）。
+
+#### `GET /api/v1/configs/{id}/token` — token 掩码预览
+
+返回 `200`：
+
+```json
+{ "has_token": true, "masked": "abcd••••••••wxyz", "length": 720 }
+```
+
+绝不返回明文。
+
+---
+
+## 3. 生命周期与状态
+
+| 端点 | 方法 | 行为 | 成功响应 |
+|---|---|---|---|
+| `/api/v1/configs/{id}/start` | POST | 拉起子进程（缺 token 会失败） | `200` `Snapshot` |
+| `/api/v1/configs/{id}/stop` | POST | 停止子进程 | `200` `Snapshot` |
+| `/api/v1/configs/{id}/reload` | POST | **= stop + start**（cloudflared 无 in-place 热重载语义） | `200` `Snapshot` |
+| `/api/v1/configs/{id}/status` | GET | 查询运行时状态 | `200` `Snapshot` |
+
+错误：实例不存在 `404 config_not_found`；状态机违例（已运行再 start 等）`409 invalid_state`。
+启动时若配置无 token，会以 `last_error` 记录并停回 `stopped`。
+
+---
+
+## 4. 历史流量曲线
+
+### `GET /api/v1/metrics/{id}/traffic` — 降采样历史曲线
+
+查询参数：
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `scope` | `server` | `server` / `proxy`（按 cloudflared 指标维度，通常用 `server`） |
+| `key` | `""` | scope=proxy 时的目标键 |
+| `from` | 0 | 起始时间（unix 秒，0 = 不限） |
+| `to` | （必填） | 结束时间（unix 秒）。**缺失返回 `400`** |
+| `step` | 60 | 降采样步长（秒） |
+
+返回 `200`：
 
 ```json
 {
-  "inst_id": "edge-tokyo",
+  "inst_id": "my-tunnel",
   "scope": "server",
   "key": "",
   "step": 60,
-  "points": [
-    { "ts": 1717576800, "in": 1048576, "out": 524288, "conns": 12 },
-    { "ts": 1717576860, "in": 2097152, "out": 1048576, "conns": 15 }
-  ]
+  "points": [ { "ts": 1717800000, "in": 12, "out": 0, "conns": 4 } ]
 }
 ```
 
-聚合语义：同一桶内 `in/out` 求和（区间增量），`conns` 取最大。
+> **`in`/`out`/`conns` 是计数而非字节**：`in`=请求数增量、`out`=错误数增量、`conns`=当前 HA 连接数。详见 §0.4。
+
+度量存储被禁用时返回 `503 internal_error`。
 
 ---
 
-## 7. 告警
+## 5. 告警规则与事件（snake_case）
 
-存储同 §6 的 SQLite，表 `alert_rules` 与 `alert_events`。规则结构见 [`internal/metrics/store_alerts.go`](../internal/metrics/store_alerts.go)。
+### 5.1 `AlertRule` 字段表（[`metrics/store_alerts.go`](../internal/metrics/store_alerts.go)）
 
-度量存储未启用 → `503`。
-
-### 7.1 `GET /api/v1/alerts` — 列规则
-
-```json
-{
-  "items": [
-    {
-      "id": "rule_a1b2c3",
-      "name": "edge-tokyo 连接数超 100",
-      "enabled": true,
-      "inst_id": "edge-tokyo",
-      "metric": "conns",
-      "op": ">",
-      "threshold": 100,
-      "for_seconds": 60,
-      "target": "",
-      "webhook": "https://example.com/hook"
-    }
-  ]
-}
-```
-
-### 7.2 `POST /api/v1/alerts` — 创建规则
-
-请求体 = `AlertRule`（与 §7.1 元素相同）。
-
-- `id` 缺省时服务端生成 `rule_xxxxxx`（12 hex）。
-- 必填：`name` / `metric` / `op`。
-- `inst_id` 缺省时设为 `"*"`（匹配全部实例）。
-- `metric` 枚举：`conns` / `traffic_in_rate` / `traffic_out_rate`。
-- `op` 枚举：`>` / `>=` / `<` / `<=`。
-- `target`：代理名；空或 `"*"` 表示 server scope。
-- `for_seconds`：触发去抖（持续多少秒才 fire）。
-- `webhook`：可选，fire/resolve 都会 POST 一份事件 JSON。
-
-返回 `201` + 完整 `AlertRule`。缺字段 → `400 / bad_request`。
-
-### 7.3 `GET /api/v1/alerts/{id}` — 取单条
-
-返回 `200` + `AlertRule`；不存在 → `404 / config_not_found`（这里复用了同一 code，关注 HTTP 状态即可）。
-
-### 7.4 `PUT /api/v1/alerts/{id}` — 替换
-
-请求体 = `AlertRule`（`id` 取自 path）。返回 `200` + `AlertRule`。
-
-### 7.5 `DELETE /api/v1/alerts/{id}`
-
-返回 `204`。
-
-### 7.6 `GET /api/v1/alerts/events` — 列事件
-
-Query：
-
-| 名称 | 类型 | 说明 |
+| 字段 | 类型 | 说明 |
 |---|---|---|
-| `state` | string | `firing` / `resolved`，缺省 = 全部 |
-| `from` | int64（Unix 秒） | 0 = 不下界 |
-| `to` | int64（Unix 秒） | 0 = 不上界 |
+| `id` | string | 规则 ID，创建时可省略（自动生成 `rule_<hex>`） |
+| `name` | string | 规则名（必填） |
+| `enabled` | bool | 是否启用 |
+| `inst_id` | string | 目标实例 ID，`*` = 全部（省略时后端补 `*`） |
+| `metric` | string | `conns` / `requests_rate` / `errors_rate`（旧名 `traffic_in_rate` / `traffic_out_rate` 作为别名仍接受） |
+| `op` | string | `>` / `>=` / `<` / `<=` |
+| `threshold` | number | 与指标值比较的阈值 |
+| `for_seconds` | int | 需持续满足多久才触发（去抖） |
+| `target` | string | 维度键，`""` / `*` 表示实例级 |
+| `webhook` | string | 触发 / 解除时 POST 的可选 URL |
 
-返回（按 `fired_at` 降序，最多 500 条）：
+> 校验：`name`/`metric`/`op` 必填；`metric` 不在允许集返回 `400`（提示 `use conns|requests_rate|errors_rate`）；`op` 不在 `>|>=|<|<=` 返回 `400`。
 
-```json
-{
-  "items": [
-    {
-      "id": "evt_x1y2z3",
-      "rule_id": "rule_a1b2c3",
-      "inst_id": "edge-tokyo",
-      "target": "",
-      "fired_at": 1717576800,
-      "resolved_at": 0,
-      "value": 123.0,
-      "state": "firing"
-    }
-  ]
-}
-```
+### 5.2 `AlertEvent` 字段表
 
-`resolved_at = 0` 表示仍在 firing。
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | string | 事件 ID |
+| `rule_id` | string | 关联规则 ID |
+| `inst_id` | string | 实例 ID |
+| `target` | string | 维度键 |
+| `fired_at` | int64 | 触发时间（unix 秒） |
+| `resolved_at` | int64 | 解除时间（unix 秒），仍在触发时为 `0` |
+| `value` | number | 触发时的指标值 |
+| `state` | string | `firing` / `resolved` |
+
+### 5.3 端点
+
+| 端点 | 方法 | 说明 | 响应 |
+|---|---|---|---|
+| `/api/v1/alerts/events` | GET | 列事件，支持 `?state=&from=&to=`（from/to 为 unix 秒，0=不限，最多 500 条按 `fired_at` 倒序） | `200` `{ "items": AlertEvent[] }` |
+| `/api/v1/alerts` | GET | 列全部规则 | `200` `{ "items": AlertRule[] }` |
+| `/api/v1/alerts` | POST | 创建规则（`id` 可省略） | `201` `AlertRule` / `400` |
+| `/api/v1/alerts/{id}` | GET | 取单条规则 | `200` `AlertRule` / `404` |
+| `/api/v1/alerts/{id}` | PUT | 替换规则（`id` 取自路径） | `200` `AlertRule` / `400` |
+| `/api/v1/alerts/{id}` | DELETE | 删除规则 | `204` |
+
+度量存储被禁用时所有告警端点返回 `503`。
 
 ---
 
-## 8. 日志
+## 6. 配置校验
 
-### 8.0 模型
+### `POST /api/v1/validate` — 校验配置（不持久化）
 
-每个 frps worker 的 stdout/stderr 全量落到该实例独立的 `<FRPSMGR_DATA_DIR>/logs/<id>.log`。本节接口都基于这个文件（与历史版本"合并日志 + 前缀过滤"截然不同）。
+- `Content-Type: application/json` → 请求体按 `TunnelConfigV1`（camelCase）解析。
+- 其它 `Content-Type` → 请求体按 cloudflared YAML 解析。
 
-`DELETE` 不删盘上文件，只更新 `meta.json` 中该实例的 `log_view_since` 时间戳（Unix 毫秒），后续 `GET` / `WS` 跳过时间戳早于水位的行。
-
-### 8.1 `GET /api/v1/configs/{id}/logs` — 离线查询尾部
-
-Query：
-
-| 名称 | 类型 | 默认 | 说明 |
-|---|---|---|---|
-| `lines` | int | 200 | 返回最多多少行 |
-
-返回：
+无论成功失败均返回 `200`：
 
 ```json
-{ "lines": ["2026-06-05 12:30:11.546 [I] start frps success", "..."], "next_offset": 0 }
+{ "valid": true, "warnings": ["advancedEnvOverrides key FOO ... will be ignored"] }
 ```
 
-`next_offset` 始终为 `0`（兼容字段，不支持 offset 翻页）。文件不存在 → `200` + 空数组。  
-实例不存在 → `404 / config_not_found`。
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `valid` | bool | 是否通过 |
+| `errors` | string[]? | 校验失败原因（仅失败时） |
+| `warnings` | string[]? | 非阻断告警（如 `advancedEnvOverrides` 含不在白名单的键） |
 
-### 8.2 `GET /api/v1/configs/{id}/logs/files` — 列轮转副本
+> 跨字段规则：`edge.postQuantum` 为 true 但 `edge.protocol != "quic"` 时返回 `valid:false`。
+
+---
+
+## 7. 日志
+
+### 7.1 `GET /api/v1/configs/{id}/logs` — 拉取日志
+
+查询参数：`lines`（默认 200）、`level`、`keyword`、`since`（保留，当前实现按实例 `log_view_since` 水位过滤）。返回 `200`：
 
 ```json
-{
-  "items": [
-    { "path": "/data/logs/edge-tokyo.log" },
-    { "path": "/data/logs/edge-tokyo.log.2026-06-04", "rotated_at": "2026-06-04T00:00:00Z" }
-  ]
-}
+{ "lines": ["2026-06-08 12:00:00.000 ...", "..."], "next_offset": 0 }
 ```
 
-### 8.3 `DELETE /api/v1/configs/{id}/logs` — 重置视图水位
+> `next_offset` 在合并日志模式下恒为 `0`（不支持 offset 翻页，前端只用 `lines`）。实例不存在返回 `404`。
 
-不删盘上文件。把当前时刻（`time.Now().UnixMilli()`）写到 `meta.json` 中该实例的 `log_view_since`。返回 `204`。
+### 7.2 `GET /api/v1/configs/{id}/logs/files` — 列日志轮转副本
 
-### 8.4 `GET /api/v1/configs/{id}/logs/tail` — WebSocket 实时流
+返回 `200`：`{ "items": [ { "path": "/.../my-tunnel.log", "rotated_at": "..." } ] }`（`rotated_at` 为可选轮转时间）。
 
-- 协议：`Upgrade: websocket`
-- 鉴权：`?token=<bearer>` 查询参数
-- 每帧：`{"line": "..."}`
-- 服务端每 30s ping 保活；任一方关闭 → 结束
-- `log_view_since` 同样作用于实时流（早于水位的行被丢弃）
+### 7.3 `DELETE /api/v1/configs/{id}/logs` — 清空（仅置水位）
+
+把该实例的 `log_view_since` 设为当前时间 → 后续 `GET /logs` 与 WS tail 跳过更早的行，**不删盘上文件** → `204`。
+
+### 7.4 `WS /api/v1/configs/{id}/logs/tail` — 实时日志流
+
+升级为 WebSocket（浏览器用 `?token=...` 传鉴权）。服务端每帧推送：
+
+```json
+{ "line": "2026-06-08 12:00:00.000 [INF] ..." }
+```
+
+早于 `log_view_since` 水位的行被丢弃。
+
+---
+
+## 8. 事件总线（WebSocket）
+
+### `WS /api/v1/events` — 全局事件流
+
+升级为 WebSocket（浏览器用 `?token=...`）。可选查询参数：`?since=<seq>`（回放历史事件）、`?types=`、`?config_ids=`（CSV 过滤）。连接后也可发送 `{ "action": "filter", "types": [...], "config_ids": [...] }` 动态改过滤、`{ "action": "unfilter" }` 取消。
+
+每帧为一个 `Event`（外层 **snake_case**，来源 [`eventbus/types.go`](../internal/eventbus/types.go)）：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `seq` | uint64 | 单调递增序号（配合 `?since=` 断点回放） |
+| `type` | string | 事件类型，见下表 |
+| `config_id` | string? | 关联实例 ID（部分事件无） |
+| `ts` | string | 事件时间（RFC3339） |
+| `data` | object? | 类型相关负载 |
+
+| `type` | `data` 形态 | 说明 |
+|---|---|---|
+| `config.changed` | — | 配置被创建 / 修改 |
+| `config.deleted` | — | 配置被删除 |
+| `instance.state` | `{ state, prev_state? }` | 实例状态变化 |
+| `instance.error` | `{ message }` | 实例错误 |
+| `alert` | （告警负载） | 告警触发 / 解除 |
 
 ---
 
 ## 9. 导入 / 导出
 
-### 9.1 `POST /api/v1/import/file` — 单文件上传
+### 9.1 `POST /api/v1/import/file` — 上传 YAML 文件
 
-`multipart/form-data`：
+`multipart/form-data`，字段 `file`（`.yaml` / `.yml`），可选 `id`（缺省取文件名去扩展名）。成功 `200` 返回 `ConfigEnvelope`。
 
-| 字段 | 必填 | 说明 |
-|---|---|---|
-| `file` | √ | `.toml` / `.ini` / `.conf`，≤ 4 MiB |
-| `id` | × | 不填则用文件名去后缀 |
+### 9.2 `POST /api/v1/import/url` — 从 URL 导入
 
-返回 `200` + `ConfigEnvelope`。
+请求体 `{ "url": "https://...", "id": "可选" }`。仅接受公网 `http`/`https`（内置 SSRF 防护：拒绝回环 / 私网 / 链路本地等地址，下载失败统一回 `502 upstream_failure` 不回显内部错误）。成功 `200` 返回 `ConfigEnvelope`。
 
-### 9.2 `POST /api/v1/import/url` — 从 URL 拉取
+### 9.3 `POST /api/v1/import/text` — 从文本导入
 
-```json
-{ "url": "https://...", "id": "optional_id" }
-```
+请求体 `{ "id": "...", "text": "<cloudflared YAML>" }`（`id` 与 `text` 必填）。成功 `200` 返回 `ConfigEnvelope`。
 
-`url` 必填；下载 ≤ 4 MiB，15s 超时。失败 → `502 / upstream_failure`。
+### 9.4 `POST /api/v1/import/zip` — 导入备份包
 
-### 9.3 `POST /api/v1/import/text` — 直接粘贴
+`multipart/form-data`，字段 `file`（由 `/export/all` 产出的 zip）。已存在的同名配置会被覆盖；包内 `meta.json` 用于还原显示名 / 手动启动 / 排序。成功 `200`：
 
 ```json
-{ "id": "edge-tokyo", "text": "bindPort = 7000\n...", "format": "toml" }
+{ "imported": ["tunnel-a", "tunnel-b"] }
 ```
 
-`id` 与 `text` 必填，`format` 仅作元信息。
+### 9.5 `GET /api/v1/configs/{id}/export` — 导出单个配置
 
-### 9.4 `POST /api/v1/import/zip` — 批量 ZIP 备份
+返回 `text/yaml` 下载（`Content-Disposition: attachment; filename="<id>.yaml"`），即磁盘原文（含 token）。
 
-`multipart/form-data` 的 `file` 字段，≤ 32 MiB，内含 `*.toml/*.ini/*.conf`。重名覆盖。
+### 9.6 `GET /api/v1/export/all` — 导出全部为 zip
 
-```json
-{ "imported": ["edge-tokyo", "edge-osaka"] }
-```
-
-### 9.5 `GET /api/v1/configs/{id}/export` — 单实例下载
-
-`Content-Type: application/toml`，`Content-Disposition: attachment; filename="{id}.toml"`。
-
-### 9.6 `GET /api/v1/export/all` — 全部 ZIP
-
-`Content-Type: application/zip`，`Content-Disposition: attachment; filename="frps-manager-export-YYYYmmdd-HHMMSS.zip"`，内含 `profiles/*.{toml,ini,conf}`。
+返回 `application/zip`，内含 `profiles/*.yaml`（每实例原文）+ `meta.json`。
 
 ---
 
-## 10. 系统监控
+## 10. 系统监控（snake_case）
 
-### 10.1 `GET /api/v1/system/info` — 汇总快照
+均为只读 `GET`，字段全 snake_case，来源 [`internal/sysinfo`](../internal/sysinfo/)。
 
-返回（best-effort，任一字段失败仅省略不报错）：
-
-| 顶层字段 | 类型 | 说明 |
-|---|---|---|
-| `uptime_s` | int64 | 守护进程已运行秒 |
-| `data_dir` | string | 数据目录 |
-| `host` | object | `hostname / os / platform / platform_version / kernel_version / kernel_arch / virtualization / uptime_seconds / boot_time` |
-| `cpu` | object | `logical_count / physical_count / model_name / mhz_per_core / usage_percent / per_core[] / load_avg_1/5/15` |
-| `memory` | object | `total / available / used / used_percent / free / swap_total / swap_used`（字节） |
-| `disk` | array | 元素 `path / fstype / total / used / free / used_percent` |
-| `network` | array | 元素 `name / bytes_sent / bytes_recv / packets_sent / packets_recv` |
-| `connections` | object | `tcp_total / udp_total / tcp_by_status{ESTABLISHED:...} / owned_tcp_conns / owned_udp_conns` |
-| `process` | object | `pid / cpu_percent / rss_bytes / vms_bytes / num_threads / num_goroutines / open_files / start_time` |
-
-### 10.2 子接口
-
-| 路径 | 方法 | 说明 | 备注 |
-|---|---|---|---|
-| `/api/v1/system/cpu` | GET | 单独取 cpu 块 | query `window=200ms`（≤5s） |
-| `/api/v1/system/memory` | GET | 单独取 memory 块 |  |
-| `/api/v1/system/disk` | GET | 返回 `{items: [...]}` | query `paths=/a,/b`（CSV） |
-| `/api/v1/system/network` | GET | 返回 `{items: [...]}` |  |
-| `/api/v1/system/connections` | GET | 单独取 connections 块 |  |
-| `/api/v1/system/process` | GET | 单独取 process 块 |  |
-
-任一收集器失败 → `500 / internal_error`。
-
----
-
-## 11. `ServerConfigV1` 数据模型（业务层 camelCase）
-
-完整字段以 [`github.com/fatedier/frp/pkg/config/v1.ServerConfig`](https://pkg.go.dev/github.com/fatedier/frp@v0.69.1/pkg/config/v1#ServerConfig) 为准。本守护进程**不重新声明字段**（也不偷偷过滤），上游新加字段自动接住。
-
-下面列出**高频字段**，全部 **camelCase**：
-
-```jsonc
-{
-  "bindAddr": "0.0.0.0",
-  "bindPort": 7000,
-
-  // 多协议绑定
-  "kcpBindPort": 7000,
-  "quicBindPort": 7001,
-  "quic": { "keepalivePeriod": 10, "maxIdleTimeout": 30, "maxIncomingStreams": 100000 },
-
-  // vhost 反向代理（注意：HTTP/HTTPS 是大写）
-  "vhostHTTPPort": 8080,
-  "vhostHTTPSPort": 8443,
-  "vhostHTTPTimeout": 60,
-
-  // tcpmux
-  "tcpmuxHTTPConnectPort": 1337,
-  "tcpmuxPassthrough": false,
-
-  // 通用
-  "subDomainHost": "frps.example.com",
-  "custom404Page": "/path/to/404.html",
-  "proxyBindAddr": "",
-  "maxPortsPerClient": 0,
-  "maxPoolCount": 5,
-  "heartbeatTimeout": 90,
-  "userConnTimeout": 10,
-
-  // 端口白名单（与端口段一致）
-  "allowPorts": [
-    { "start": 2000, "end": 3000 },
-    { "single": 6000 }
-  ],
-
-  // 鉴权
-  "auth": {
-    "method": "token",
-    "additionalScopes": ["HeartBeats", "NewWorkConns"],
-    "token": "abc",
-    "oidc": {
-      "issuer": "https://login.example.com",
-      "audience": "frps",
-      "skipExpiryCheck": false,
-      "skipIssuerCheck": false
-    }
-  },
-
-  // 传输层
-  "transport": {
-    "tcpMux": true,
-    "tcpMuxKeepaliveInterval": 30,
-    "tcpKeepAlive": 7200,
-    "maxPoolCount": 5,
-    "heartbeatTimeout": 90,
-    "tls": {
-      "force": false,
-      "certFile": "",
-      "keyFile": "",
-      "trustedCaFile": ""
-    }
-  },
-
-  // ⚠️ 用户配置的 webServer 会被守护进程在 worker 启动时强制覆盖为 127.0.0.1 + 随机账密
-  "webServer": {
-    "addr": "127.0.0.1",
-    "port": 7400,
-    "user": "admin",
-    "password": "admin",
-    "tls": { "certFile": "", "keyFile": "", "trustedCaFile": "" },
-    "pprofEnable": false
-  },
-
-  "log": {
-    "to": "console",
-    "level": "info",
-    "maxDays": 3,
-    "disablePrintColor": false
-  },
-
-  // SSH 隧道网关
-  "sshTunnelGateway": {
-    "bindPort": 0,
-    "privateKeyFile": "",
-    "autoGenPrivateKeyPath": "",
-    "authorizedKeysFile": ""
-  },
-
-  // HTTP API 插件
-  "httpPlugins": [
-    {
-      "name": "user-manager",
-      "addr": "127.0.0.1:9000",
-      "path": "/handler",
-      "ops": ["Login", "NewProxy"]
-    }
-  ]
-}
-```
-
-### 11.1 上游不规则 camelCase 陷阱（写错 key 不报错，但回读拿不到）
-
-- `vhostHTTPPort`（**不是** `vhostHttpPort`）
-- `vhostHTTPSPort`
-- `vhostHTTPTimeout`
-- `tcpmuxHTTPConnectPort`
-- `kcpBindPort` / `quicBindPort`（`Bind` 而非 `bind` 之外的形式）
-- `tokenEndpointURL`（OIDC，**不是** `tokenEndpointUrl`）
-- `transport.tcpMux`（**不是** `tcpmux`）
-- `transport.tcpMuxKeepaliveInterval`
-
-Go `encoding/json` 默认大小写不敏感匹配，前端写错 key **也能反序列化成功**，但回读字段名错对不上前端模型，UI 上看到"配置丢失"。
-
-### 11.2 `frpsmgr` 管理器元数据（camelCase）
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `name` | string | 用户备注名（列表展示用） |
-| `manualStart` | bool | `true` = 启动 daemon 时不自动 Start；`false`/缺省 = 启动 daemon 时自动 Start |
-
-不写入 frps TOML，落 [`meta.json`](../internal/manager/manager.go)（与 `sort`、`log_view_since` 同文件）。
-
----
-
-## 12. WebSocket 全局事件 `/api/v1/events`
-
-升级为 WebSocket。
-
-### 12.1 初始过滤（query 可选）
-
-```
-?types=instance.state,proxy.status&config_ids=a,b&since=12345
-```
-
-`since` = 上次收到的最大 `seq`，用于断线重连时回放 ring buffer。
-
-### 12.2 客户端帧
-
-```json
-{ "action": "filter", "types": ["instance.state"], "config_ids": ["edge-tokyo"] }
-```
-
-```json
-{ "action": "unfilter" }
-```
-
-### 12.3 服务端帧（每帧一个 `Event` 对象，**snake_case**）
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `seq` | uint64 | 单调自增序号 |
-| `type` | string | 见下表 |
-| `config_id` | string | 关联实例 ID（部分事件可省） |
-| `ts` | RFC3339 | 发生时间 |
-| `data` | object | 各 `type` 对应的载荷 |
-
-| `type` | `data` 字段 |
+| 端点 | 返回 |
 |---|---|
-| `instance.state` | `{state, prev_state}` |
-| `instance.error` | `{message}` |
-| `proxy.status` | `{name, type, status, remote_addr, error}` |
-| `proxy.connections` | `{name, type, cur_conns}` |
-| `config.changed` | （无 data） |
-| `config.deleted` | （无 data） |
-| `log.line` | `{line}` |
-| `alert` | 见告警事件载荷 |
-
-服务端每 30s 发 ping。
+| `/api/v1/system/info` | 聚合快照：`{ uptime_s, data_dir, host, cpu, memory, disk, network, connections, process }`（各块 best-effort，单块采集失败则缺省） |
+| `/api/v1/system/cpu` | CPU 指标（`?window=200ms` 控制采样窗口，上限 5s） |
+| `/api/v1/system/memory` | 虚拟内存 + swap |
+| `/api/v1/system/disk` | `{ "items": [...] }`（默认 `/` 与 data dir，`?paths=/a,/b` 追加） |
+| `/api/v1/system/network` | `{ "items": [...] }` 每网卡字节 / 包计数 |
+| `/api/v1/system/connections` | 全局 socket 计数摘要 + 守护进程子集 |
+| `/api/v1/system/process` | 守护进程自身信息 |
 
 ---
 
-## 13. HTTP 状态码总览
+## 11. cloudflared 二进制版本管理（snake_case）
 
-| 状态 | 含义 | 何时出现 |
+存储根目录 `CFDM_BINARIES_DIR`（默认 `{DATA_DIR}/bin/cloudflared`），按 `<version>/cloudflared[.exe]` 落盘，活跃版本记于 `active.json`。
+
+### 11.1 `GET /api/v1/binaries` — 已安装版本（`BinaryItem`）
+
+返回 `200`：`{ "items": BinaryItem[] }`（按版本 tag 降序）。存储未配置时返回空列表。
+
+`BinaryItem` 字段（来源 `cfdbin.InstalledVersion`）：
+
+| 字段 | 类型 | 说明 |
 |---|---|---|
-| `200` | 成功 | GET / 大多数 PUT / PATCH / POST |
-| `201` | 已创建 | `POST /configs`、`/configs/{id}/duplicate`、`POST /alerts`、（部分 import 在已存在场景仍 200） |
-| `204` | 无内容 | DELETE / reorder / `DELETE /logs` |
-| `400` | 请求体或参数不合法 | 未知 JSON key、缺必填、merge patch 解析失败 |
-| `401` | 未鉴权 | Bearer Token 缺失 / 无效 |
-| `404` | 未找到 | 实例 / 规则不存在 |
-| `409` | 状态机或资源冲突 | 已存在、未运行不能 reload、已运行不能 start |
-| `500` | 内部错误 | 序列化 / 持久化 / 系统监控收集器失败 |
-| `502` | 上游失败 | worker loopback 不通、远程下载失败 |
-| `503` | 服务不可用 | 度量存储未启用（`/metrics/*`、`/alerts/*`） |
+| `version` | string | 版本 tag |
+| `path` | string | 二进制绝对路径 |
+| `sha256` | string? | 校验和（来自 meta.json） |
+| `source_url` | string? | 下载源 URL |
+| `mirror` | string? | 实际命中的镜像前缀（直连为空） |
+| `downloaded_at` | string? | 下载时间 |
+| `size_bytes` | int? | 字节大小 |
+| `verified` | bool | 是否通过 SHA256 校验 |
+| `is_active` | bool | 是否为当前活跃版本 |
+
+### 11.2 `GET /api/v1/binaries/available` — 可下载版本（`AvailableRelease`）
+
+从 GitHub 拉取最近 10 个 release。返回 `200`：`{ "items": AvailableRelease[] }`。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `tag_name` | string | release tag |
+| `published_at` | string | 发布时间 |
+| `html_url` | string | release 页面 |
+| `asset_url` | string? | 当前平台对应资产的下载链接（匹配不到则空） |
+| `sha256` | string? | 从 release 正文解析出的当前平台资产校验和 |
+
+下载器未配置返回 `503`；GitHub 拉取失败返回 `502 upstream_failure`。
+
+### 11.3 `POST /api/v1/binaries/install` — 安装某版本
+
+请求体 `{ "version": "2026.5.2" }`（省略时回退 `CFDM_CLOUDFLARED_DEFAULT_VERSION`，默认 `latest`；`latest` 会被解析为具体 tag）。下载 → 校验 SHA256 → 落盘（macOS 资产解包后再校验内层二进制）。
+
+成功 `201` 返回 `VersionMeta`（**注意：比 `BinaryItem` 多 `platform`/`arch`/`asset_name` 字段**）：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `version` | string | 解析后的具体 tag |
+| `platform` | string | GOOS |
+| `arch` | string | GOARCH |
+| `asset_name` | string | 命中的资产文件名 |
+| `sha256` | string | 校验和 |
+| `source_url` | string | 直连下载 URL |
+| `mirror` | string? | 命中的镜像前缀 |
+| `downloaded_at` | string | 下载时间（UTC） |
+| `size_bytes` | int | 字节大小 |
+| `verified` | bool | 恒为 true |
+
+错误：version tag 非法 `400`；下载 / 校验失败 `502 upstream_failure`；客户端取消或超时 `504`；存储未配置 `503`。
+
+### 11.4 `POST /api/v1/binaries/{version}/activate` — 设为活跃版本
+
+将 `{version}` 写入 `active.json`（须已安装）。成功 `200`：
+
+```json
+{ "version": "2026.5.2", "active": true }
+```
+
+version 未安装返回 `404 not_found`；version 非法 `400`。
+
+### 11.5 `DELETE /api/v1/binaries/{version}` — 删除某版本
+
+删除版本目录 → `204`。当前活跃版本不可删，返回 `409 conflict`；未安装返回 `404 not_found`；version 非法 `400`；存储未配置 `503`。
 
 ---
 
-## 14. 与上一代（frpc 客户端管理器）的差异速查
+## 12. 端点速查
 
-| 维度 | 旧（frpc manager） | 现（frps manager） |
-|---|---|---|
-| 业务模型 | `ClientConfigV1`（含 `serverAddr/serverPort/proxies[]/visitors[]/nathole`） | `ServerConfigV1`（含 `bindPort/vhost*/auth/transport`，**不含 proxies/visitors** — 由客户端运行时注册） |
-| 进程模型 | 单进程多 frpc.Service | 每实例一个 re-exec 子进程（`frps-worker`） |
-| 运行时数据 | `Snapshot.proxies[]` 内嵌 | 不在 Snapshot；改走 `/runtime/*` 透传 frps 原生 mem/clients |
-| reload | frpc 支持 in-place 热更 | frps 必须重启进程，本守护进程的 reload = stop + start |
-| 命名风格 | Snapshot snake_case，ClientConfig camelCase | Snapshot snake_case，ServerConfig camelCase，runtime 端点 frps 原生 camelCase |
-| `/proxies*` 端点 | 存在（增删改查 + toggle） | **已删除** — frps 不管理代理定义 |
-| `/nathole/discover` | 存在 | **已删除** — STUN 探测属于 frpc 视角，与 frps 管理器无关 |
-| 合并日志 | `frpc.log` 单文件 + 前缀过滤 | 每实例独立 `<id>.log` |
+| # | 方法 | 路径 | 鉴权 |
+|---|---|---|---|
+| 1 | GET | `/api/v1/health` | 否 |
+| 2 | GET | `/api/v1/version` | 是 |
+| 3 | GET | `/api/v1/version/check` | 是 |
+| 4 | POST | `/api/v1/system/update` | 是 |
+| 5 | GET | `/api/v1/configs` | 是 |
+| 6 | POST | `/api/v1/configs` | 是 |
+| 7 | POST | `/api/v1/configs/reorder` | 是 |
+| 8 | GET | `/api/v1/configs/{id}` | 是 |
+| 9 | PUT | `/api/v1/configs/{id}` | 是 |
+| 10 | PATCH | `/api/v1/configs/{id}` | 是 |
+| 11 | DELETE | `/api/v1/configs/{id}` | 是 |
+| 12 | POST | `/api/v1/configs/{id}/duplicate` | 是 |
+| 13 | GET | `/api/v1/configs/{id}/raw` | 是 |
+| 14 | PUT | `/api/v1/configs/{id}/raw` | 是 |
+| 15 | GET | `/api/v1/configs/{id}/token` | 是 |
+| 16 | POST | `/api/v1/configs/{id}/start` | 是 |
+| 17 | POST | `/api/v1/configs/{id}/stop` | 是 |
+| 18 | POST | `/api/v1/configs/{id}/reload` | 是 |
+| 19 | GET | `/api/v1/configs/{id}/status` | 是 |
+| 20 | GET | `/api/v1/metrics/{id}/traffic` | 是 |
+| 21 | GET | `/api/v1/alerts/events` | 是 |
+| 22 | GET | `/api/v1/alerts` | 是 |
+| 23 | POST | `/api/v1/alerts` | 是 |
+| 24 | GET | `/api/v1/alerts/{id}` | 是 |
+| 25 | PUT | `/api/v1/alerts/{id}` | 是 |
+| 26 | DELETE | `/api/v1/alerts/{id}` | 是 |
+| 27 | POST | `/api/v1/validate` | 是 |
+| 28 | GET | `/api/v1/configs/{id}/logs` | 是 |
+| 29 | GET | `/api/v1/configs/{id}/logs/files` | 是 |
+| 30 | DELETE | `/api/v1/configs/{id}/logs` | 是 |
+| 31 | WS | `/api/v1/configs/{id}/logs/tail` | 是（`?token=`） |
+| 32 | WS | `/api/v1/events` | 是（`?token=`） |
+| 33 | POST | `/api/v1/import/file` | 是 |
+| 34 | POST | `/api/v1/import/url` | 是 |
+| 35 | POST | `/api/v1/import/text` | 是 |
+| 36 | POST | `/api/v1/import/zip` | 是 |
+| 37 | GET | `/api/v1/configs/{id}/export` | 是 |
+| 38 | GET | `/api/v1/export/all` | 是 |
+| 39 | GET | `/api/v1/system/info` | 是 |
+| 40 | GET | `/api/v1/system/cpu` | 是 |
+| 41 | GET | `/api/v1/system/memory` | 是 |
+| 42 | GET | `/api/v1/system/disk` | 是 |
+| 43 | GET | `/api/v1/system/network` | 是 |
+| 44 | GET | `/api/v1/system/connections` | 是 |
+| 45 | GET | `/api/v1/system/process` | 是 |
+| 46 | GET | `/api/v1/binaries` | 是 |
+| 47 | GET | `/api/v1/binaries/available` | 是 |
+| 48 | POST | `/api/v1/binaries/install` | 是 |
+| 49 | POST | `/api/v1/binaries/{version}/activate` | 是 |
+| 50 | DELETE | `/api/v1/binaries/{version}` | 是 |
+
+---
+
+## 13. curl 速查
+
+```bash
+TOKEN=dev
+BASE=http://localhost:8080
+
+# 探活（无需鉴权）
+curl -s $BASE/api/v1/health
+
+# 创建隧道（token 提交后响应不会回传）
+curl -s -X POST $BASE/api/v1/configs \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"id":"demo","config":{"token":"<base64...>","edge":{"protocol":"auto"}},"cfdmgr":{"name":"演示","manualStart":false}}'
+
+# 编辑时留空 token = 保留现有
+curl -s -X PUT $BASE/api/v1/configs/demo \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"config":{"token":"","edge":{"protocol":"quic","postQuantum":true}},"cfdmgr":{"name":"演示"}}'
+
+# 看 token 掩码
+curl -s $BASE/api/v1/configs/demo/token -H "Authorization: Bearer $TOKEN"
+
+# 启动 / 状态
+curl -s -X POST $BASE/api/v1/configs/demo/start -H "Authorization: Bearer $TOKEN"
+curl -s $BASE/api/v1/configs/demo/status -H "Authorization: Bearer $TOKEN"
+
+# 历史曲线（to 必填，in/out/conns 是计数不是字节）
+curl -s "$BASE/api/v1/metrics/demo/traffic?from=0&to=$(date +%s)&step=60" -H "Authorization: Bearer $TOKEN"
+
+# 校验 YAML
+curl -s -X POST $BASE/api/v1/validate \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/yaml' \
+  --data-binary @profile.yaml
+
+# 安装并激活 cloudflared 二进制
+curl -s -X POST $BASE/api/v1/binaries/install -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"version":"latest"}'
+curl -s -X POST $BASE/api/v1/binaries/2026.5.2/activate -H "Authorization: Bearer $TOKEN"
+
+# WebSocket（浏览器用 ?token= 传鉴权）
+# ws://localhost:8080/api/v1/events?token=dev
+# ws://localhost:8080/api/v1/configs/demo/logs/tail?token=dev
+```

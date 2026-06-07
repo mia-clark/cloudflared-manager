@@ -1,196 +1,155 @@
 openapi: 3.1.0
 info:
-  title: cfdmgrd API (cloudflared 多实例管理器)
+  title: cloudflared-manager API
   description: |
-    无头 cloudflared 多实例管理器（headless cloudflared manager）。守护进程 `cfdmgrd` 把
-    每个 frps 实例放进**独立的子进程**（`frps-worker`，re-exec 自身），通过
-    HTTP/JSON 暴露 CRUD、生命周期、运行时监控、历史流量、告警、日志、导入导出、
-    系统监控等管理面。
+    无头（headless）cloudflared **TOKEN 模式** 隧道管理器。守护进程 `cfdmgrd` 把每个
+    cloudflared 连接器（connector）放进**独立的外部子进程**（`cloudflared tunnel run --token …`），
+    通过 HTTP/JSON 暴露隧道 CRUD、生命周期、历史曲线、告警、日志、导入导出、系统监控、
+    cloudflared 二进制版本管理等管理面。前端 SPA 已 embed 进二进制，生产环境同域。
 
     关键架构事实（落到 API 字段命名、状态码、错误形态都需要先看一眼）：
 
-    - **子进程模型**：每个运行中的 frps 都是父进程 re-exec 出来的独立子进程
-      （`frps-worker`），原因是上游 `mem.StatsCollector` 是进程级全局单例，同进程
-      跑多个 frps 会把所有实例流量混在一起，无法按实例分离。
-    - **webServer 强制 loopback**：worker 启动前父进程预分配一个 `127.0.0.1:N`
-      端口，强制覆盖 `webServer.addr/port/user/password`，账密随机；父进程通过
-      该 loopback 反向读取 frps 原生 `/api/serverinfo`、`/api/proxy/{type}`、
-      `/api/clients` 等运行时指标。**用户配置里的 webServer 项会被忽略**。
-    - **reload = 重启**：frps 服务端参数（bindPort/vhost*/auth/tls 等）没有
-      in-place 热重载语义，本守护进程对 `POST .../reload` 的实现就是先
-      `stop()` 再 `start()`。
-    - **每实例独立日志**：`<CFDM_DATA_DIR>/logs/<id>.log`，worker 的
-      stdout/stderr 全量落盘。
-    - **配置数据模型**：业务层（请求/响应里的 `config` 字段）= `ServerConfigV1`，
-      内嵌上游 `v1.ServerConfig`，**全 camelCase**（bindPort/vhostHTTPPort/auth/
-      transport/tls/...）。
-    - **快照/事件/告警/流量**：`Snapshot`、`/runtime/*`、`/metrics/*`、`/alerts/*`、
-      WebSocket `/events` 帧统一走 **snake_case**（id/inst_id/started_at/...）。
-    - **`/runtime/*` 是 frps 原生 JSON 透传**：经 worker loopback 代理 frps 原生
-      `/api/serverinfo`、`/api/proxy/{type}`、`/api/clients` 后**原样回写**，
-      字段形态为 frps 原生 **camelCase**（不是本项目的 Snapshot snake_case 风格），
-      参考 frps 文档 / `fatedier/frp` 源码。
+    - **外部子进程模型**：每个运行中的隧道都是 `cloudflared tunnel run` 子进程，由
+      `internal/process.Worker` 监管。父进程通过 `--token`（环境变量 `TUNNEL_TOKEN`）注入
+      连接器令牌；ingress / public-hostname / origin 等参数全部在 Cloudflare Zero Trust
+      控制台维护，**不在本模型内**。
+    - **reload = 重启**：cloudflared 没有针对单连接器参数的 in-place 热重载语义，
+      `POST .../reload` 的实现就是 `stop()` 再 `start()`。
+    - **token 高度敏感**：所有返回 `ConfigEnvelope` 的接口里 `config.token` 一律被剥除（空串），
+      仅用布尔 `has_token` 表明是否已存储；掩码预览经 `GET /configs/{id}/token` 获取。
+      **唯一例外** 是 `GET /configs/{id}/raw`（原样回写磁盘 YAML，按设计包含 token，属敏感导出）。
+    - **流量曲线语义特殊**：cloudflared **没有按隧道的字节计数器**。
+      `GET /metrics/{id}/traffic` 返回的 `points[].in` = 请求数增量、`out` = 错误数增量、
+      `conns` = HA 连接数 gauge（**不是字节**），均来自抓取 cloudflared 自带的 `--metrics`
+      Prometheus 端点。
+    - **配置数据模型**：业务层（请求/响应里的 `config` 字段）= `TunnelConfigV1`，**全 camelCase**
+      （edge/reliability/logging/identity/advancedEnvOverrides/binaryVersion）。
+    - **快照 / 事件 / 告警 / 流量 / 系统监控**：`Snapshot`、`/metrics/*`、`/alerts/*`、`/system/*`、
+      WebSocket `/events` 帧统一走 **snake_case**（id / inst_id / started_at / metrics_port …）。
+    - **配置经环境变量注入**（前缀 `CFDM_`）：
+      `CFDM_API_TOKEN`（必填，鉴权令牌）、`CFDM_HTTP_ADDR`（默认 `:8080`）、
+      `CFDM_DATA_DIR`（默认 `/var/lib/cfdmgrd`）、`CFDM_CORS_ORIGINS`（默认 `*`）、
+      `CFDM_LOG_LEVEL`（默认 `info`）、`CFDM_DOCS_ENABLED`（默认 `true`）、
+      `CFDM_DOWNLOAD_MIRRORS`（下载镜像前缀，逗号分隔）、`CFDM_GITHUB_TOKEN`（抬高 GitHub API 限额）、
+      `CFDM_BINARIES_DIR`（cloudflared 二进制存储目录）、
+      `CFDM_CLOUDFLARED_DEFAULT_VERSION`（默认 `latest`）、`CFDM_SELF_UPDATE_ENABLED`（默认 `true`）。
 
-    所有非 2xx 业务错误统一返回 `Error` 信封。`decodeJSON` 启用了
+    鉴权：除 `GET /api/v1/health` 与 `/api/docs/*` 外，所有接口都需要 `Authorization: Bearer <token>`。
+    WebSocket 接口（`/events`、`/configs/{id}/logs/tail`）额外接受 `?token=` 查询参数。
+
+    所有非 2xx 业务错误统一返回 `Error` 信封 `{error:{code,message,details?}}`。请求体解码启用了
     `DisallowUnknownFields()`，请求体里出现未声明的 key 会直接 `400`。
-  version: 1.2.23
+  version: 2.0.0
 servers:
   - url: http://localhost:8080
+    description: 本地守护进程（CFDM_HTTP_ADDR 默认 :8080）
 security:
   - BearerAuth: []
+
 tags:
   - name: system
-    description: 健康探活、版本、主机/进程监控
-  - name: docs
-    description: 内嵌 OpenAPI Spec + Scalar UI
+    description: 健康检查、版本、自更新、系统监控
   - name: configs
-    description: frps 实例 CRUD（配置体 = ServerConfigV1，camelCase）
-  - name: lifecycle
-    description: 启停、重启（reload = stop + start）
-  - name: runtime
-    description: 经 worker loopback 透传 frps 原生 mem/clients/proxies（camelCase 原生 JSON）
+    description: 隧道配置 CRUD、生命周期、token、原始 YAML
   - name: metrics
-    description: 历史流量曲线（SQLite 时序）
-  - name: alerts
-    description: 告警规则与事件
-  - name: validate
-    description: 配置校验（不落盘）
+    description: 历史流量曲线与告警规则 / 事件
   - name: logs
-    description: 每实例独立 <id>.log 文件
-  - name: import-export
-    description: 配置导入/导出、ZIP 备份
+    description: 隧道日志查询与实时跟踪
   - name: events
-    description: WebSocket 实时事件
+    description: WebSocket 事件推送
+  - name: importexport
+    description: 配置导入 / 导出
+  - name: binaries
+    description: cloudflared 二进制版本管理
 
 paths:
-  # ============================================================
-  # 0. 系统：健康/版本/Docs（health 无需鉴权）
-  # ============================================================
   /api/v1/health:
     get:
       tags: [system]
+      summary: 健康检查（无需鉴权）
       security: []
-      summary: Liveness probe（无需鉴权）
       responses:
-        '200':
-          description: OK
+        "200":
+          description: 存活
           content:
             application/json:
               schema:
                 type: object
-                required: [status, uptime_s]
                 properties:
-                  status:   { type: string, enum: [ok] }
+                  status: { type: string, example: ok }
                   uptime_s: { type: integer, format: int64, description: 守护进程已运行秒数 }
+
   /api/v1/version:
     get:
       tags: [system]
-      summary: 版本信息（daemon / 内嵌 frp / 构建时间）
+      summary: 守护进程版本与构建日期
       responses:
-        '200':
-          description: OK
+        "200":
+          description: 版本信息
           content:
             application/json:
               schema:
                 type: object
-                required: [daemon, frp, build_date]
                 properties:
-                  daemon:     { type: string, example: "1.2.23" }
-                  frp:        { type: string, example: "0.69.1" }
-                  build_date: { type: string, example: "unknown" }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+                  daemon: { type: string, description: cfdmgrd 版本号 }
+                  build_date: { type: string, description: 构建日期 }
+
   /api/v1/version/check:
     get:
       tags: [system]
-      summary: 检查最新 GitHub release 并与当前版本对比
+      summary: 检查是否有新版本可自更新
+      description: 对比运行版本与 GitHub 最新 release，并报告部署方式与一键自更新能力。`?force=1` 跳过约 1 小时缓存。
       parameters:
-        - in: query
-          name: force
-          required: false
-          schema: { type: integer, enum: [1] }
-          description: 传 1 绕过后端 ~1h 缓存。
+        - { name: force, in: query, required: false, schema: { type: string }, description: "1 / refresh=1 跳过缓存" }
       responses:
-        '200':
-          description: >
-            版本对比结果。always 返回 current/frp/deployment_mode/
-            self_update_enabled/has_update/can_self_update/reason；
-            latest/changelog/html_url/published_at 仅查询成功时；
-            check_error 仅失败时。
+        "200":
+          description: 检查结果
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VersionCheck" }
+
   /api/v1/system/update:
     post:
       tags: [system]
-      summary: 启动一键自更新并重启守护进程
-      description: >
-        起一个脱离进程下载最新 release、替换二进制并重启服务，立即返回 202。
-        客户端轮询 /api/v1/version 直到 daemon 版本变化即完成。受
-        CFDM_SELF_UPDATE_ENABLED 控制，仅服务部署可用（Docker/手动运行拒绝）。
-        ?force=1 可在已是最新时强制重装。
+      summary: 触发分离式自更新并重启
+      description: 立即返回 202，守护进程随后被替换并重启；客户端应轮询 /health 与 /version 直到版本变化。`?force=1` 强制重装最新版。
       parameters:
-        - in: query
-          name: force
-          required: false
-          schema: { type: integer, enum: [1] }
+        - { name: force, in: query, required: false, schema: { type: string }, description: "1 强制重装当前最新版" }
       responses:
-        '202': { description: 更新已开始；服务即将重启 }
-        '403': { description: 自更新已被禁用 }
-        '400': { description: 当前部署不支持自更新 }
-        '409': { description: 已是最新版本（未带 force=1）}
-        '502': { description: 无法获取最新版本 }
-  /api/docs:
-    get:
-      tags: [docs]
-      security: []
-      summary: 重定向到 /api/docs/
-      responses:
-        '301': { description: Moved Permanently }
-  /api/docs/:
-    get:
-      tags: [docs]
-      security: []
-      summary: Scalar API 文档 UI（HTML）
-      responses:
-        '200': { description: OK, content: { text/html: { schema: { type: string } } } }
-  /api/docs/openapi.yaml:
-    get:
-      tags: [docs]
-      security: []
-      summary: OpenAPI 3.1 Spec（YAML）
-      responses:
-        '200': { description: OK, content: { application/yaml: { schema: { type: string } } } }
-  /api/docs/openapi.json:
-    get:
-      tags: [docs]
-      security: []
-      summary: OpenAPI Spec（实现层与 YAML 等价，Content-Type 不同）
-      responses:
-        '200': { description: OK }
-
-  # ============================================================
-  # 1. 配置 CRUD
-  # ============================================================
-  /api/v1/configs:
-    get:
-      tags: [configs]
-      summary: 列出所有 frps 实例（仅 Snapshot，不含 config 体）
-      responses:
-        '200':
-          description: OK
+        "202":
+          description: 更新已开始
           content:
             application/json:
               schema:
                 type: object
-                required: [items]
+                properties:
+                  status: { type: string, example: updating }
+                  from: { type: string }
+                  to: { type: string }
+                  message: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest", description: 部署方式不支持自更新 }
+        "403": { $ref: "#/components/responses/Error", description: Web 端自更新被禁用（CFDM_SELF_UPDATE_ENABLED=false） }
+        "409": { $ref: "#/components/responses/Conflict", description: 已是最新版本（可加 ?force=1） }
+        "502": { $ref: "#/components/responses/Error", description: 无法获取最新版本（上游失败） }
+
+  /api/v1/configs:
+    get:
+      tags: [configs]
+      summary: 列出所有隧道配置快照
+      responses:
+        "200":
+          description: 快照列表
+          content:
+            application/json:
+              schema:
+                type: object
                 properties:
                   items:
                     type: array
-                    items: { $ref: '#/components/schemas/Snapshot' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+                    items: { $ref: "#/components/schemas/Snapshot" }
     post:
       tags: [configs]
-      summary: 创建 frps 实例
-      description: |
-        请求体 `config` 是 `ServerConfigV1`（camelCase）。`frpsmgr` 是管理器层
-        元数据（显示名、是否手动启动），不写入 frps TOML，落 meta.json。
+      summary: 新建隧道配置
       requestBody:
         required: true
         content:
@@ -199,22 +158,22 @@ paths:
               type: object
               required: [id, config]
               properties:
-                id:     { type: string, description: 实例 ID（不含路径分隔符，≤64） }
-                config: { $ref: '#/components/schemas/ServerConfig' }
-                frpsmgr: { $ref: '#/components/schemas/MgrMeta' }
+                id: { type: string, description: 配置 id（文件名干）}
+                config: { $ref: "#/components/schemas/TunnelConfigV1" }
+                cfdmgr: { $ref: "#/components/schemas/MgrMeta" }
       responses:
-        '201':
+        "201":
           description: 已创建
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ConfigEnvelope' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '409': { $ref: '#/components/responses/Conflict' }
+              schema: { $ref: "#/components/schemas/ConfigEnvelope" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
   /api/v1/configs/reorder:
     post:
       tags: [configs]
-      summary: 持久化实例展示顺序
+      summary: 持久化前端展示排序
       requestBody:
         required: true
         content:
@@ -226,26 +185,27 @@ paths:
                 order:
                   type: array
                   items: { type: string }
+                  description: 按期望顺序排列的配置 id
       responses:
-        '204': { description: 已保存（未知 ID 静默丢弃） }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+        "204": { description: 已保存 }
+
   /api/v1/configs/{id}:
     parameters:
-      - $ref: '#/components/parameters/IdInPath'
+      - { name: id, in: path, required: true, schema: { type: string } }
     get:
       tags: [configs]
-      summary: 取单个实例（Snapshot + ServerConfigV1 + 元数据）
+      summary: 获取单个配置（含 TunnelConfigV1，token 已剥除）
       responses:
-        '200':
-          description: OK
+        "200":
+          description: 配置信封
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ConfigEnvelope' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/NotFound' }
+              schema: { $ref: "#/components/schemas/ConfigEnvelope" }
+        "404": { $ref: "#/components/responses/NotFound" }
     put:
       tags: [configs]
-      summary: 整体替换实例配置（运行中会自动 restart=reload）
+      summary: 整体替换配置体
+      description: 提交空 / 省略 token 表示保留已存储的 token；仅非空 token 才会替换密钥。
       requestBody:
         required: true
         content:
@@ -254,52 +214,47 @@ paths:
               type: object
               required: [config]
               properties:
-                config: { $ref: '#/components/schemas/ServerConfig' }
-                frpsmgr: { $ref: '#/components/schemas/MgrMeta' }
+                config: { $ref: "#/components/schemas/TunnelConfigV1" }
+                cfdmgr: { $ref: "#/components/schemas/MgrMeta" }
       responses:
-        '200':
-          description: OK
+        "200":
+          description: 已更新
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ConfigEnvelope' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/NotFound' }
+              schema: { $ref: "#/components/schemas/ConfigEnvelope" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
     patch:
       tags: [configs]
-      summary: JSON Merge Patch（RFC 7396）局部更新
-      description: |
-        请求体不走 `decodeJSON`，整段被当作对 `ServerConfigV1` 的 merge-patch。
-        `null` 代表删除该键。运行中实例会触发 restart。
+      summary: RFC 7396 合并补丁（merge-patch）应用于 TunnelConfigV1
       requestBody:
         required: true
         content:
-          application/json:
+          application/merge-patch+json:
             schema:
               type: object
-              additionalProperties: true
+              description: TunnelConfigV1 的部分字段；null 值删除对应键
       responses:
-        '200':
-          description: OK
+        "200":
+          description: 已更新
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ConfigEnvelope' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/NotFound' }
+              schema: { $ref: "#/components/schemas/ConfigEnvelope" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
     delete:
       tags: [configs]
-      summary: 删除实例（先 stop，再删盘上 TOML + meta）
+      summary: 停止并删除隧道配置
       responses:
-        '204': { description: 已删除 }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/NotFound' }
+        "204": { description: 已删除 }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/v1/configs/{id}/duplicate:
     parameters:
-      - $ref: '#/components/parameters/IdInPath'
+      - { name: id, in: path, required: true, schema: { type: string } }
     post:
       tags: [configs]
-      summary: 在新 ID 下复制一份配置
+      summary: 复制配置到新 id（token 不会被复制）
       requestBody:
         required: true
         content:
@@ -310,463 +265,342 @@ paths:
               properties:
                 new_id: { type: string }
       responses:
-        '201':
+        "201":
           description: 已复制
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ConfigEnvelope' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
+              schema: { $ref: "#/components/schemas/ConfigEnvelope" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
   /api/v1/configs/{id}/raw:
     parameters:
-      - $ref: '#/components/parameters/IdInPath'
+      - { name: id, in: path, required: true, schema: { type: string } }
     get:
       tags: [configs]
-      summary: 读取磁盘上的原始 TOML 字节
+      summary: 获取磁盘原始 YAML（敏感：按设计包含 token）
       responses:
-        '200':
-          description: OK
+        "200":
+          description: 原始 cloudflared YAML
           content:
-            application/toml:
+            text/yaml:
               schema: { type: string }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/NotFound' }
+        "404": { $ref: "#/components/responses/NotFound" }
     put:
       tags: [configs]
-      summary: 覆盖磁盘上的原始 TOML 字节（解析失败 400；运行中会触发 restart）
+      summary: 用原始 cloudflared YAML 替换磁盘文件
       requestBody:
         required: true
         content:
-          application/toml: { schema: { type: string } }
-          text/plain:       { schema: { type: string } }
+          text/yaml:
+            schema: { type: string }
       responses:
-        '200':
-          description: OK
+        "200":
+          description: 已写入
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ConfigEnvelope' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/NotFound' }
+              schema: { $ref: "#/components/schemas/ConfigEnvelope" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
-  # ============================================================
-  # 2. 生命周期
-  # ============================================================
+  /api/v1/configs/{id}/token:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [configs]
+      summary: 获取连接器 token 的掩码预览（永不返回明文）
+      responses:
+        "200":
+          description: 掩码信息
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  has_token: { type: boolean }
+                  masked: { type: string, description: "首 4 + 圆点 + 末 4 的不可逆预览" }
+                  length: { type: integer }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/v1/configs/{id}/start:
     parameters:
-      - $ref: '#/components/parameters/IdInPath'
+      - { name: id, in: path, required: true, schema: { type: string } }
     post:
-      tags: [lifecycle]
-      summary: 启动实例（已运行 → 409 invalid_state）
+      tags: [configs]
+      summary: 启动隧道实例
       responses:
-        '200':
-          description: OK
+        "200":
+          description: 启动后的快照
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Snapshot' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
+              schema: { $ref: "#/components/schemas/Snapshot" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict", description: 已在运行 }
+
   /api/v1/configs/{id}/stop:
     parameters:
-      - $ref: '#/components/parameters/IdInPath'
+      - { name: id, in: path, required: true, schema: { type: string } }
     post:
-      tags: [lifecycle]
-      summary: 停止实例（已停止则幂等成功）
+      tags: [configs]
+      summary: 停止隧道实例
       responses:
-        '200':
-          description: OK
+        "200":
+          description: 停止后的快照
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Snapshot' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/NotFound' }
+              schema: { $ref: "#/components/schemas/Snapshot" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/v1/configs/{id}/reload:
     parameters:
-      - $ref: '#/components/parameters/IdInPath'
+      - { name: id, in: path, required: true, schema: { type: string } }
     post:
-      tags: [lifecycle]
-      summary: 重启实例（reload = stop + start，frps 服务端参数没有 in-place 热重载）
+      tags: [configs]
+      summary: 重载隧道实例（实现为 stop + start）
       responses:
-        '200':
-          description: OK
+        "200":
+          description: 重载后的快照
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Snapshot' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/NotFound' }
+              schema: { $ref: "#/components/schemas/Snapshot" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/v1/configs/{id}/status:
     parameters:
-      - $ref: '#/components/parameters/IdInPath'
+      - { name: id, in: path, required: true, schema: { type: string } }
     get:
-      tags: [lifecycle]
-      summary: 取实例当前运行快照
+      tags: [configs]
+      summary: 获取隧道实例运行状态快照
       responses:
-        '200':
-          description: OK
+        "200":
+          description: 快照
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Snapshot' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/NotFound' }
+              schema: { $ref: "#/components/schemas/Snapshot" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
-  # ============================================================
-  # 3. 校验
-  # ============================================================
-  /api/v1/validate:
-    post:
-      tags: [validate]
-      summary: 校验 frps 配置但不落盘
-      description: |
-        - `Content-Type: application/json`：请求体为 `ServerConfigV1`。
-        - 其它（如 `application/toml` / `text/plain`）：请求体为原始 frps TOML。
-        无论合法与否都返回 `200`，结果在 `valid/errors/warnings` 字段里。
-      requestBody:
-        required: true
-        content:
-          application/json: { schema: { $ref: '#/components/schemas/ServerConfig' } }
-          application/toml: { schema: { type: string } }
-          text/plain:       { schema: { type: string } }
-      responses:
-        '200':
-          description: OK（校验结果在 body 内）
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/ValidateResp' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-
-  # ============================================================
-  # 4. 运行时监控（经 worker loopback 透传 frps 原生 JSON，camelCase）
-  # ============================================================
-  /api/v1/runtime/{id}/overview:
-    parameters:
-      - $ref: '#/components/parameters/IdInPath'
-    get:
-      tags: [runtime]
-      summary: 透传 frps `/api/serverinfo`（camelCase 原生 JSON）
-      description: |
-        响应原样转发 frps 原生 `/api/serverinfo` 的 JSON。**关键字段是 camelCase**，
-        不是本项目 Snapshot 的 snake_case 风格。常见字段见 `ServerOverview` schema
-        （声明了高频字段并允许 `additionalProperties`，宽容上游新增）。
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/ServerOverview' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
-        '502': { $ref: '#/components/responses/UpstreamFailure' }
-  /api/v1/runtime/{id}/proxies:
-    parameters:
-      - $ref: '#/components/parameters/IdInPath'
-    get:
-      tags: [runtime]
-      summary: 跨 8 个 proxy type 聚合 `/api/proxy/{type}` 后扁平化
-      description: |
-        守护进程顺次访问 frps `/api/proxy/{tcp|udp|http|https|stcp|sudp|xtcp|tcpmux}`，
-        把每个类型返回的 `proxies` 数组拼成一个扁平列表。**元素形态为 frps 原生
-        camelCase**（name/type/conf/...）。
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [proxies]
-                properties:
-                  proxies:
-                    type: array
-                    items: { type: object, additionalProperties: true }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
-        '502': { $ref: '#/components/responses/UpstreamFailure' }
-  /api/v1/runtime/{id}/proxies/{name}:
-    parameters:
-      - $ref: '#/components/parameters/IdInPath'
-      - in: path
-        name: name
-        required: true
-        schema: { type: string }
-        description: 代理名（frps 原生注册名）
-    get:
-      tags: [runtime]
-      summary: 透传 frps `/api/proxies/{name}`（camelCase 原生 JSON）
-      description: |
-        响应原样转发 frps 原生 `/api/proxies/{name}` 的 JSON（防御式解析，shape
-        以上游为准）。常见字段：`name / type / conf / clientVersion / lastStartTime
-        / lastCloseTime / status / todayTrafficIn / todayTrafficOut / curConns / err`。
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: true
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
-        '502': { $ref: '#/components/responses/UpstreamFailure' }
-  /api/v1/runtime/{id}/clients:
-    parameters:
-      - $ref: '#/components/parameters/IdInPath'
-    get:
-      tags: [runtime]
-      summary: 透传 frps `/api/clients`（活跃 frpc 客户端列表，camelCase 原生 JSON）
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: true
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
-        '502': { $ref: '#/components/responses/UpstreamFailure' }
-
-  # ============================================================
-  # 5. 历史流量（SQLite 时序）
-  # ============================================================
   /api/v1/metrics/{id}/traffic:
     parameters:
-      - $ref: '#/components/parameters/IdInPath'
-      - in: query
-        name: scope
-        schema: { type: string, enum: [server, proxy], default: server }
-        description: '`server` = 实例总量；`proxy` = 单条代理'
-      - in: query
-        name: key
-        schema: { type: string }
-        description: 当 `scope=proxy` 时填代理名；`scope=server` 时留空
-      - in: query
-        name: from
-        schema: { type: integer, format: int64 }
-        description: Unix 秒，0/省略 = 不下界限
-      - in: query
-        name: to
-        required: true
-        schema: { type: integer, format: int64 }
-        description: Unix 秒（必填）
-      - in: query
-        name: step
-        schema: { type: integer, format: int64, default: 60 }
-        description: 桶大小（秒）
+      - { name: id, in: path, required: true, schema: { type: string }, description: 隧道实例 id }
     get:
       tags: [metrics]
-      summary: 单实例历史流量（按桶聚合，in/out 求和、conns 取最大）
+      summary: 历史流量曲线（降采样）
+      description: |
+        语义特殊：cloudflared 没有按隧道字节计数器。`in` = 请求数增量、`out` = 错误数增量、
+        `conns` = HA 连接数 gauge（均非字节）。
+      parameters:
+        - { name: scope, in: query, required: false, schema: { type: string, default: server } }
+        - { name: key, in: query, required: false, schema: { type: string } }
+        - { name: from, in: query, required: false, schema: { type: integer, format: int64 }, description: 起始 unix 秒 }
+        - { name: to, in: query, required: true, schema: { type: integer, format: int64 }, description: 结束 unix 秒（必填，缺省 400） }
+        - { name: step, in: query, required: false, schema: { type: integer, default: 60 }, description: 降采样步长（秒） }
       responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/TrafficSeriesResp' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '503': { $ref: '#/components/responses/ServiceUnavailable' }
-
-  # ============================================================
-  # 6. 告警
-  # ============================================================
-  /api/v1/alerts:
-    get:
-      tags: [alerts]
-      summary: 列出所有告警规则
-      responses:
-        '200':
-          description: OK
+        "200":
+          description: 曲线
           content:
             application/json:
               schema:
                 type: object
-                required: [items]
+                properties:
+                  inst_id: { type: string }
+                  scope: { type: string }
+                  key: { type: string }
+                  step: { type: integer }
+                  points:
+                    type: array
+                    items: { $ref: "#/components/schemas/TrafficPoint" }
+        "400": { $ref: "#/components/responses/BadRequest", description: "to 缺失" }
+
+  /api/v1/alerts/events:
+    get:
+      tags: [metrics]
+      summary: 列出告警事件
+      parameters:
+        - { name: state, in: query, required: false, schema: { type: string, enum: [firing, resolved] } }
+        - { name: from, in: query, required: false, schema: { type: integer, format: int64 } }
+        - { name: to, in: query, required: false, schema: { type: integer, format: int64 } }
+      responses:
+        "200":
+          description: 事件列表
+          content:
+            application/json:
+              schema:
+                type: object
                 properties:
                   items:
                     type: array
-                    items: { $ref: '#/components/schemas/AlertRule' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+                    items: { $ref: "#/components/schemas/AlertEvent" }
+
+  /api/v1/alerts:
+    get:
+      tags: [metrics]
+      summary: 列出告警规则
+      responses:
+        "200":
+          description: 规则列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/AlertRule" }
     post:
-      tags: [alerts]
-      summary: 新建告警规则（id 可省略，服务端自动生成 `rule_xxxxxx`）
+      tags: [metrics]
+      summary: 创建告警规则（省略 id 时自动生成）
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/AlertRule' }
+            schema: { $ref: "#/components/schemas/AlertRule" }
       responses:
-        '201':
+        "201":
           description: 已创建
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/AlertRule' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '503': { $ref: '#/components/responses/ServiceUnavailable' }
-  /api/v1/alerts/events:
-    get:
-      tags: [alerts]
-      summary: 列出告警事件（按 fired_at 降序，最多 500 条）
-      parameters:
-        - in: query
-          name: state
-          schema: { type: string, enum: [firing, resolved] }
-        - in: query
-          name: from
-          schema: { type: integer, format: int64, description: Unix 秒 }
-        - in: query
-          name: to
-          schema: { type: integer, format: int64, description: Unix 秒 }
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [items]
-                properties:
-                  items:
-                    type: array
-                    items: { $ref: '#/components/schemas/AlertEvent' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+              schema: { $ref: "#/components/schemas/AlertRule" }
+        "400": { $ref: "#/components/responses/BadRequest", description: "metric 须为 conns|requests_rate|errors_rate（traffic_in_rate/traffic_out_rate 为遗留别名），op 须为 >|>=|<|<=" }
+
   /api/v1/alerts/{id}:
     parameters:
-      - $ref: '#/components/parameters/IdInPath'
+      - { name: id, in: path, required: true, schema: { type: string } }
     get:
-      tags: [alerts]
-      summary: 取单条告警规则
+      tags: [metrics]
+      summary: 获取单条告警规则
       responses:
-        '200':
-          description: OK
+        "200":
+          description: 规则
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/AlertRule' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+              schema: { $ref: "#/components/schemas/AlertRule" }
+        "404": { $ref: "#/components/responses/NotFound" }
     put:
-      tags: [alerts]
-      summary: 替换告警规则（id 取自 path）
+      tags: [metrics]
+      summary: 替换告警规则（id 取自路径）
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/AlertRule' }
+            schema: { $ref: "#/components/schemas/AlertRule" }
       responses:
-        '200':
-          description: OK
+        "200":
+          description: 已更新
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/AlertRule' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+              schema: { $ref: "#/components/schemas/AlertRule" }
+        "400": { $ref: "#/components/responses/BadRequest" }
     delete:
-      tags: [alerts]
+      tags: [metrics]
       summary: 删除告警规则
       responses:
-        '204': { description: 已删除 }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+        "204": { description: 已删除 }
 
-  # ============================================================
-  # 7. 日志（每实例独立 <id>.log）
-  # ============================================================
+  /api/v1/validate:
+    post:
+      tags: [configs]
+      summary: 校验隧道配置（不持久化）
+      description: "Content-Type 为 application/json 时按 TunnelConfigV1 解析；其它 Content-Type 按原始 cloudflared YAML 解析。"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TunnelConfigV1" }
+          text/yaml:
+            schema: { type: string }
+      responses:
+        "200":
+          description: 校验结果（语法/语义错误也以 200 + valid=false 返回）
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid: { type: boolean }
+                  errors: { type: array, items: { type: string } }
+                  warnings: { type: array, items: { type: string } }
+
   /api/v1/configs/{id}/logs:
     parameters:
-      - $ref: '#/components/parameters/IdInPath'
+      - { name: id, in: path, required: true, schema: { type: string } }
     get:
       tags: [logs]
-      summary: 离线查询日志尾部（按 LogViewSince 水位过滤）
+      summary: 查询隧道日志最近若干行
       parameters:
-        - in: query
-          name: lines
-          schema: { type: integer, default: 200, minimum: 1 }
+        - { name: lines, in: query, required: false, schema: { type: integer, default: 200 } }
+        - { name: level, in: query, required: false, schema: { type: string } }
+        - { name: keyword, in: query, required: false, schema: { type: string } }
+        - { name: since, in: query, required: false, schema: { type: integer, format: int64 } }
       responses:
-        '200':
-          description: OK
+        "200":
+          description: 日志行
           content:
             application/json:
               schema:
                 type: object
-                required: [lines, next_offset]
                 properties:
-                  lines:
-                    type: array
-                    items: { type: string }
-                  next_offset:
-                    type: integer
-                    format: int64
-                    description: 兼容字段，目前恒为 0（不支持 offset 翻页）
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/NotFound' }
+                  lines: { type: array, items: { type: string } }
+                  next_offset: { type: integer, format: int64 }
+        "404": { $ref: "#/components/responses/NotFound" }
     delete:
       tags: [logs]
-      summary: 重置该实例的"未读水位"（LogViewSince）
-      description: |
-        **不** 物理删除 `<id>.log` 文件，只把该实例的 `log_view_since` 时间戳写到
-        meta.json。后续 `GET /logs` 与 `WS /logs/tail` 仅返回时间戳 ≥ 此值的行。
+      summary: 清空日志视图（设置"已清空"水位线，不删除文件）
       responses:
-        '204': { description: OK }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/NotFound' }
+        "204": { description: 已设置水位线 }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/v1/configs/{id}/logs/files:
     parameters:
-      - $ref: '#/components/parameters/IdInPath'
+      - { name: id, in: path, required: true, schema: { type: string } }
     get:
       tags: [logs]
-      summary: 列出该实例 `<id>.log` 的轮转副本
+      summary: 列出本实例日志文件（含轮转副本）
       responses:
-        '200':
-          description: OK
+        "200":
+          description: 文件列表
           content:
             application/json:
               schema:
                 type: object
-                required: [items]
                 properties:
                   items:
                     type: array
                     items:
                       type: object
-                      required: [path]
                       properties:
-                        path:       { type: string }
+                        path: { type: string }
                         rotated_at: { type: string, format: date-time }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/NotFound' }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/v1/configs/{id}/logs/tail:
     parameters:
-      - $ref: '#/components/parameters/IdInPath'
+      - { name: id, in: path, required: true, schema: { type: string } }
+      - { name: token, in: query, required: false, schema: { type: string }, description: WebSocket 鉴权令牌 }
     get:
       tags: [logs]
-      summary: WebSocket — 实时日志流
-      description: |
-        升级为 WebSocket。每帧 = `{"line": "<one frps log line>"}`。LogViewSince
-        过滤同 `GET /logs`。浏览器无法自定义 WS Header，故鉴权支持
-        `?token=<bearer>` 查询参数。服务端每 30s 发 ping 保活。
+      summary: 实时跟踪日志（WebSocket 升级）
+      description: "升级为 WebSocket；每帧为 JSON `{\"line\":\"<日志行>\"}`。"
       responses:
-        '101': { description: Switching Protocols }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/NotFound' }
+        "101": { description: 协议切换为 WebSocket }
+        "404": { $ref: "#/components/responses/NotFound" }
 
-  # ============================================================
-  # 8. 导入 / 导出
-  # ============================================================
+  /api/v1/events:
+    get:
+      tags: [events]
+      summary: 事件推送（WebSocket 升级）
+      description: "升级为 WebSocket，推送 Event 帧。事件类型包含 config.changed / config.deleted / instance.state / instance.error / alert 等。"
+      parameters:
+        - { name: token, in: query, required: false, schema: { type: string }, description: WebSocket 鉴权令牌 }
+        - { name: since, in: query, required: false, schema: { type: integer, format: int64 }, description: 回放 seq 大于该值的历史事件 }
+        - { name: types, in: query, required: false, schema: { type: string }, description: 逗号分隔的事件类型过滤 }
+        - { name: config_ids, in: query, required: false, schema: { type: string }, description: 逗号分隔的配置 id 过滤 }
+      responses:
+        "101": { description: 协议切换为 WebSocket（每帧为 Event） }
+
   /api/v1/import/file:
     post:
-      tags: [import-export]
-      summary: 单文件上传导入（multipart）
+      tags: [importexport]
+      summary: 导入单个 .yaml/.yml 文件
       requestBody:
         required: true
         content:
@@ -775,20 +609,20 @@ paths:
               type: object
               required: [file]
               properties:
-                file: { type: string, format: binary, description: ".toml/.ini/.conf，≤ 4 MiB" }
-                id:   { type: string, description: 不填则用文件名去后缀 }
+                file: { type: string, format: binary }
+                id: { type: string, description: 可选，覆盖以文件名为准的 id }
       responses:
-        '200':
-          description: OK
+        "200":
+          description: 已导入
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ConfigEnvelope' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+              schema: { $ref: "#/components/schemas/ConfigEnvelope" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
   /api/v1/import/url:
     post:
-      tags: [import-export]
-      summary: 从 HTTP URL 拉取并导入
+      tags: [importexport]
+      summary: 从 URL 导入配置（仅允许公网 http/https）
       requestBody:
         required: true
         content:
@@ -797,21 +631,21 @@ paths:
               type: object
               required: [url]
               properties:
-                url: { type: string, format: uri }
-                id:  { type: string }
+                url: { type: string }
+                id: { type: string }
       responses:
-        '200':
-          description: OK
+        "200":
+          description: 已导入
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ConfigEnvelope' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '502': { $ref: '#/components/responses/UpstreamFailure' }
+              schema: { $ref: "#/components/schemas/ConfigEnvelope" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "502": { $ref: "#/components/responses/Error", description: 下载失败 }
+
   /api/v1/import/text:
     post:
-      tags: [import-export]
-      summary: 直接粘贴 TOML/INI 文本
+      tags: [importexport]
+      summary: 从文本（cloudflared YAML）导入配置
       requestBody:
         required: true
         content:
@@ -820,21 +654,20 @@ paths:
               type: object
               required: [id, text]
               properties:
-                id:     { type: string }
-                text:   { type: string }
-                format: { type: string, enum: [toml, ini], description: 仅元信息，自动判别 }
+                id: { type: string }
+                text: { type: string, description: cloudflared YAML 文本 }
       responses:
-        '200':
-          description: OK
+        "200":
+          description: 已导入
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ConfigEnvelope' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+              schema: { $ref: "#/components/schemas/ConfigEnvelope" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
   /api/v1/import/zip:
     post:
-      tags: [import-export]
-      summary: 批量导入 ZIP 备份（multipart）
+      tags: [importexport]
+      summary: 导入 /export/all 生成的 zip 备份
       requestBody:
         required: true
         content:
@@ -843,449 +676,490 @@ paths:
               type: object
               required: [file]
               properties:
-                file: { type: string, format: binary, description: ZIP，≤ 32 MiB }
+                file: { type: string, format: binary, description: 由 /export/all 导出的 zip }
       responses:
-        '200':
-          description: OK
+        "200":
+          description: 已导入
           content:
             application/json:
               schema:
                 type: object
-                required: [imported]
                 properties:
-                  imported:
-                    type: array
-                    items: { type: string }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+                  imported: { type: array, items: { type: string } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
   /api/v1/configs/{id}/export:
     parameters:
-      - $ref: '#/components/parameters/IdInPath'
+      - { name: id, in: path, required: true, schema: { type: string } }
     get:
-      tags: [import-export]
-      summary: 下载单实例 TOML
+      tags: [importexport]
+      summary: 导出单个配置 YAML（下载）
       responses:
-        '200':
-          description: OK
+        "200":
+          description: YAML 下载
           content:
-            application/toml:
+            text/yaml:
               schema: { type: string }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/NotFound' }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/v1/export/all:
     get:
-      tags: [import-export]
-      summary: 下载全部配置为 ZIP
+      tags: [importexport]
+      summary: 导出全部配置为 zip（profiles/*.yaml + meta.json）
       responses:
-        '200':
-          description: OK
+        "200":
+          description: zip 下载
           content:
             application/zip:
               schema: { type: string, format: binary }
-        '401': { $ref: '#/components/responses/Unauthorized' }
 
-  # ============================================================
-  # 9. WebSocket 全局事件流
-  # ============================================================
-  /api/v1/events:
-    get:
-      tags: [events]
-      summary: WebSocket — 全局事件流
-      description: |
-        升级为 WS。每帧一个 `Event` 对象。
-
-        - 初始 query 过滤（可选）：`types=instance.state,proxy.status&config_ids=a,b&since=12345`。
-        - 客户端帧：
-          - `{"action":"filter","types":["..."],"config_ids":["..."]}` 更新订阅
-          - `{"action":"unfilter"}` 取消过滤
-        - 服务端每 30s 发 ping。
-      responses:
-        '101': { description: Switching Protocols }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-
-  # ============================================================
-  # 10. 系统监控
-  # ============================================================
   /api/v1/system/info:
     get:
       tags: [system]
-      summary: 汇总快照（host+cpu+mem+disk+net+conns+process，best-effort）
+      summary: 聚合系统信息快照（host/cpu/memory/disk/network/connections/process）
       responses:
-        '200': { description: OK, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+        "200":
+          description: 聚合快照（snake_case，各块尽力而为）
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
   /api/v1/system/cpu:
     get:
       tags: [system]
-      summary: CPU 使用率与拓扑
+      summary: CPU 指标
       parameters:
-        - in: query
-          name: window
-          schema: { type: string, default: "200ms", description: "≤ 5s" }
+        - { name: window, in: query, required: false, schema: { type: string, default: 200ms }, description: 采样窗口（最大 5s）}
       responses:
-        '200': { description: OK }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+        "200":
+          description: CPU 指标
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
   /api/v1/system/memory:
     get:
       tags: [system]
-      summary: 虚拟内存 + Swap
+      summary: 内存指标（虚拟 + swap）
       responses:
-        '200': { description: OK }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+        "200":
+          description: 内存指标
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
   /api/v1/system/disk:
     get:
       tags: [system]
-      summary: 磁盘使用率（root + data_dir + 额外 paths）
+      summary: 磁盘使用（数据目录 + 根）
       parameters:
-        - in: query
-          name: paths
-          schema: { type: string, description: "CSV，绝对路径" }
+        - { name: paths, in: query, required: false, schema: { type: string }, description: 逗号分隔的额外绝对路径 }
       responses:
-        '200': { description: OK }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+        "200":
+          description: 磁盘项列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { type: object, additionalProperties: true } }
+
   /api/v1/system/network:
     get:
       tags: [system]
-      summary: 每网卡累计字节/包计数
+      summary: 各网卡字节 / 包计数
       responses:
-        '200': { description: OK }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+        "200":
+          description: 网卡项列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { type: object, additionalProperties: true } }
+
   /api/v1/system/connections:
     get:
       tags: [system]
-      summary: 全机 socket 计数 + 守护进程自有连接
+      summary: 主机套接字计数汇总
       responses:
-        '200': { description: OK }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+        "200":
+          description: 连接汇总
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
   /api/v1/system/process:
     get:
       tags: [system]
-      summary: 守护进程自身信息（RSS / threads / goroutines / open files）
+      summary: 守护进程自身进程信息
       responses:
-        '200': { description: OK }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+        "200":
+          description: 进程信息
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
+  /api/v1/binaries:
+    get:
+      tags: [binaries]
+      summary: 列出本地已安装的 cloudflared 版本
+      responses:
+        "200":
+          description: 已安装版本列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/BinaryItem" }
+
+  /api/v1/binaries/available:
+    get:
+      tags: [binaries]
+      summary: 列出 GitHub 上可下载的 release
+      responses:
+        "200":
+          description: 可用 release 列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/AvailableRelease" }
+        "502": { $ref: "#/components/responses/Error", description: 拉取 release 失败 }
+
+  /api/v1/binaries/install:
+    post:
+      tags: [binaries]
+      summary: 下载并安装一个 cloudflared 版本
+      description: "version 允许 `latest`；省略时回退到 CFDM_CLOUDFLARED_DEFAULT_VERSION（默认 latest）。安装后不自动激活。"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                version: { type: string }
+      responses:
+        "201":
+          description: 已安装
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VersionMeta" }
+        "400": { $ref: "#/components/responses/BadRequest", description: 非法 version tag }
+        "502": { $ref: "#/components/responses/Error", description: 安装 / 下载失败 }
+
+  /api/v1/binaries/{version}/activate:
+    parameters:
+      - { name: version, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [binaries]
+      summary: 将某版本设为当前激活版本
+      responses:
+        "200":
+          description: 已激活
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version: { type: string }
+                  active: { type: boolean }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound", description: 版本未安装 }
+
+  /api/v1/binaries/{version}:
+    parameters:
+      - { name: version, in: path, required: true, schema: { type: string } }
+    delete:
+      tags: [binaries]
+      summary: 删除已安装版本
+      responses:
+        "204": { description: 已删除 }
+        "404": { $ref: "#/components/responses/NotFound", description: 版本未安装 }
+        "409": { $ref: "#/components/responses/Conflict", description: 当前激活版本不可删除 }
 
 components:
   securitySchemes:
     BearerAuth:
       type: http
       scheme: bearer
-      description: '请求头 `Authorization: Bearer <CFDM_API_TOKEN>`'
-
-  parameters:
-    IdInPath:
-      in: path
-      name: id
-      required: true
-      schema: { type: string }
-      description: "实例 ID（文件名去扩展名得到，禁用路径分隔符与 shell 特殊字符；长度 ≤ 64）"
+      description: "Authorization: Bearer <CFDM_API_TOKEN>。WebSocket 接口可改用 ?token= 查询参数。"
 
   responses:
     BadRequest:
-      description: 请求体或参数不合法
+      description: 请求非法
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/Error' }
-    Unauthorized:
-      description: 缺失或无效的 Bearer Token
-      content:
-        application/json:
-          schema: { $ref: '#/components/schemas/Error' }
+          schema: { $ref: "#/components/schemas/Error" }
     NotFound:
-      description: 实例 / 规则不存在
+      description: 资源不存在
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/Error' }
+          schema: { $ref: "#/components/schemas/Error" }
     Conflict:
-      description: 状态机或资源冲突（如未运行 / 已存在）
+      description: 状态冲突
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/Error' }
-    UpstreamFailure:
-      description: 经 worker loopback 访问 frps 失败 / 远程下载失败
+          schema: { $ref: "#/components/schemas/Error" }
+    Error:
+      description: 错误
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/Error' }
-    ServiceUnavailable:
-      description: 度量存储未启用或不可用
-      content:
-        application/json:
-          schema: { $ref: '#/components/schemas/Error' }
+          schema: { $ref: "#/components/schemas/Error" }
 
   schemas:
-    # ----- 错误信封 -----
-    ErrorBody:
-      type: object
-      required: [code, message]
-      properties:
-        code:
-          type: string
-          enum:
-            - bad_request
-            - unauthorized
-            - forbidden
-            - not_found
-            - conflict
-            - validation_failed
-            - internal_error
-            - config_not_found
-            - config_already_exists
-            - invalid_state
-            - proxy_not_found
-            - proxy_already_exists
-            - upstream_failure
-        message: { type: string }
-        details:
-          type: object
-          additionalProperties: true
     Error:
       type: object
-      required: [error]
+      description: 统一错误信封
       properties:
-        error: { $ref: '#/components/schemas/ErrorBody' }
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: 机器可读错误码
+              enum:
+                - bad_request
+                - unauthorized
+                - forbidden
+                - not_found
+                - conflict
+                - validation_failed
+                - internal_error
+                - config_not_found
+                - config_already_exists
+                - invalid_state
+                - upstream_failure
+            message: { type: string }
+            details: { type: object, additionalProperties: true }
 
-    # ----- 实例运行快照（snake_case） -----
+    TunnelConfigV1:
+      type: object
+      description: "单个 cloudflared 连接器的本地配置模型（camelCase）。仅建模 `cloudflared tunnel run --token` 消费的参数。"
+      properties:
+        token:
+          type: string
+          writeOnly: true
+          description: "cloudflared 连接器令牌（高度敏感）。返回信封时一律被剥除；仅 raw YAML 接口按设计包含。"
+        edge: { $ref: "#/components/schemas/EdgeConfig" }
+        reliability: { $ref: "#/components/schemas/ReliabilityConfig" }
+        logging: { $ref: "#/components/schemas/LoggingConfig" }
+        identity: { $ref: "#/components/schemas/IdentityConfig" }
+        advancedEnvOverrides:
+          type: object
+          additionalProperties: { type: string }
+          description: 未建模 cloudflared 环境变量的逃生舱（受 pkg/cfdflags 白名单约束）
+        binaryVersion:
+          type: string
+          description: "绑定该实例使用的 cloudflared 版本；空 / current 跟随全局激活版本。"
+
+    EdgeConfig:
+      type: object
+      properties:
+        protocol:
+          type: string
+          enum: [auto, http2, quic]
+          description: cloudflared 与边缘之间的传输（auto 优先 QUIC 回落 HTTP/2）
+        edgeIpVersion:
+          type: string
+          enum: ["auto", "4", "6"]
+          description: 拨向边缘的 IP 族
+        edgeBindAddress:
+          type: string
+          description: 出站边缘连接固定的本地源 IP
+        region:
+          type: string
+          enum: ["", "us"]
+          description: 限制边缘路由区域；空为全局
+        postQuantum:
+          type: boolean
+          description: 强制后量子密钥交换；仅在 protocol == quic 时有效
+
+    ReliabilityConfig:
+      type: object
+      properties:
+        retries:
+          type: integer
+          minimum: 0
+          maximum: 20
+          description: 放弃前的连接 / 协议重试上限
+        gracePeriod:
+          type: string
+          description: 收到终止信号后等待在途请求完成的时长（Go duration 字符串，如 "30s"）
+
+    LoggingConfig:
+      type: object
+      properties:
+        logLevel:
+          type: string
+          enum: [debug, info, warn, error, fatal]
+          description: 应用级日志级别
+        transportLogLevel:
+          type: string
+          enum: [debug, info, warn, error, fatal]
+          description: QUIC/HTTP2 传输级日志级别
+
+    IdentityConfig:
+      type: object
+      properties:
+        label:
+          type: string
+          description: 连接器显示名（经 argv 注入）
+        tags:
+          type: object
+          additionalProperties: { type: string }
+          description: 上报到 Zero Trust 控制台的键值标注
+
     Snapshot:
       type: object
-      required: [id, name, path, state]
+      description: 单个隧道实例的运行时状态视图（snake_case）
       properties:
-        id:         { type: string, description: 实例 ID（= TOML 文件名去后缀） }
-        name:       { type: string, description: 用户备注名，缺省回填为 id }
-        path:       { type: string, description: TOML 绝对路径 }
-        state:
-          type: string
-          enum: [started, stopped, starting, stopping, unknown]
-        last_error: { type: string, description: 最近一次错误，可能省略 }
-        started_at:
-          type: string
-          format: date-time
-          description: 启动时间，未启动则不出现
-        stopped_at:
-          type: string
-          format: date-time
-          description: 停止时间，从未启动则不出现
+        id: { type: string }
+        name: { type: string }
+        path: { type: string, description: 配置文件路径（.yaml）}
+        log_path: { type: string }
+        state: { type: string, enum: [stopped, starting, started, stopping] }
+        last_error: { type: string }
+        started_at: { type: string, format: date-time }
+        stopped_at: { type: string, format: date-time }
+        binary_version: { type: string, description: 该实例当前使用的 cloudflared 版本 }
+        pid: { type: integer, description: 子进程 pid，0 表示未运行 }
+        metrics_port: { type: integer, description: 分配给该实例的 metrics 端口 }
 
-    # ----- 管理器元数据（meta.json，camelCase） -----
     MgrMeta:
       type: object
-      description: 管理器层元数据；不写入 frps TOML，落 `meta.json`。
+      description: 管理器级元数据（存于 meta.json，不在隧道 YAML 内）
       properties:
-        name:        { type: string, description: 用户备注名 }
-        manualStart: { type: boolean, description: 'true=不自动启动；false/缺省=daemon 启动时自动 Start' }
+        name: { type: string, description: 显示名 }
+        manualStart: { type: boolean, description: 是否禁用守护进程自启动 }
 
-    # ----- frps 服务端配置（业务层，camelCase；内嵌上游 v1.ServerConfig） -----
-    ServerConfig:
-      type: object
-      description: |
-        frps 服务端配置，对应 `pkg/config.ServerConfigV1`，内嵌上游
-        `github.com/fatedier/frp/pkg/config/v1.ServerConfig`。**全 camelCase**。
-        以下仅列出高频字段；上游字段较多且会随版本迭代，故 `additionalProperties: true`。
-
-        ⚠️ 上游不规则 camelCase（写错 key 不报错，但回读拿不到）：
-        - `vhostHTTPPort`（不是 `vhostHttpPort`）
-        - `vhostHTTPSPort`
-        - `vhostHTTPTimeout`
-        - `tcpmuxHTTPConnectPort`
-        - `kcpBindPort` / `quicBindPort`
-        - `tokenEndpointURL`（OIDC）
-
-        ⚠️ 用户配置中的 `webServer` 在 worker 启动时会被守护进程**强制覆盖**到
-        loopback 端口与随机账密，因此运行后无法从外部访问 frps 自身 dashboard，
-        管理面统一走本守护进程的 HTTP API。
-      additionalProperties: true
-      properties:
-        bindAddr:           { type: string, default: "0.0.0.0" }
-        bindPort:           { type: integer, default: 7000 }
-        kcpBindPort:        { type: integer }
-        quicBindPort:       { type: integer }
-        vhostHTTPPort:      { type: integer }
-        vhostHTTPSPort:     { type: integer }
-        vhostHTTPTimeout:   { type: integer, default: 60 }
-        tcpmuxHTTPConnectPort: { type: integer }
-        tcpmuxPassthrough:  { type: boolean }
-        subDomainHost:      { type: string }
-        custom404Page:      { type: string }
-        proxyBindAddr:      { type: string }
-        maxPortsPerClient:  { type: integer }
-        maxPoolCount:       { type: integer }
-        heartbeatTimeout:   { type: integer, default: 90 }
-        userConnTimeout:    { type: integer, default: 10 }
-        allowPorts:
-          type: array
-          items:
-            type: object
-            additionalProperties: true
-            properties:
-              start:  { type: integer }
-              end:    { type: integer }
-              single: { type: integer }
-        auth:
-          type: object
-          additionalProperties: true
-          properties:
-            method:           { type: string, enum: [token, oidc] }
-            additionalScopes:
-              type: array
-              items: { type: string, enum: [HeartBeats, NewWorkConns] }
-            token:            { type: string }
-            oidc:
-              type: object
-              additionalProperties: true
-              properties:
-                issuer:   { type: string }
-                audience: { type: string }
-                skipExpiryCheck:    { type: boolean }
-                skipIssuerCheck:    { type: boolean }
-        transport:
-          type: object
-          additionalProperties: true
-        webServer:
-          type: object
-          description: '⚠️ 运行时会被守护进程强制覆盖为 loopback + 随机账密。'
-          additionalProperties: true
-          properties:
-            addr:     { type: string }
-            port:     { type: integer }
-            user:     { type: string }
-            password: { type: string }
-            tls:      { type: object, additionalProperties: true }
-            pprofEnable: { type: boolean }
-        log:
-          type: object
-          additionalProperties: true
-          properties:
-            to:                  { type: string, description: "stdout/console/<path>；worker 模型下推荐留默认（stdout 已被父进程接管）" }
-            level:               { type: string, enum: [trace, debug, info, warn, error] }
-            maxDays:             { type: integer }
-            disablePrintColor:   { type: boolean }
-        sshTunnelGateway:
-          type: object
-          additionalProperties: true
-        httpPlugins:
-          type: array
-          items: { type: object, additionalProperties: true }
-
-    # ----- 配置信封：Snapshot + Config + Frpsmgr -----
     ConfigEnvelope:
-      allOf:
-        - $ref: '#/components/schemas/Snapshot'
-        - type: object
-          required: [config, frpsmgr]
-          properties:
-            config: { $ref: '#/components/schemas/ServerConfig' }
-            frpsmgr: { $ref: '#/components/schemas/MgrMeta' }
-
-    # ----- 配置校验响应 -----
-    ValidateResp:
       type: object
-      required: [valid]
-      properties:
-        valid:    { type: boolean }
-        errors:
-          type: array
-          items: { type: string }
-        warnings:
-          type: array
-          items: { type: string }
+      description: "Snapshot 字段 + config（TunnelConfigV1，token 已剥除）+ cfdmgr + has_token。"
+      allOf:
+        - $ref: "#/components/schemas/Snapshot"
+        - type: object
+          properties:
+            config: { $ref: "#/components/schemas/TunnelConfigV1" }
+            cfdmgr: { $ref: "#/components/schemas/MgrMeta" }
+            has_token:
+              type: boolean
+              description: 是否已存储 token（不泄露明文）
 
-    # ----- 历史流量 -----
     TrafficPoint:
       type: object
-      required: [ts, in, out, conns]
+      description: "历史曲线单点（注意语义：in=请求数增量、out=错误数增量、conns=HA 连接数 gauge，均非字节）。"
       properties:
-        ts:    { type: integer, format: int64, description: 桶起始 Unix 秒 }
-        in:    { type: integer, format: int64, description: 区间流入字节（桶内求和） }
-        out:   { type: integer, format: int64, description: 区间流出字节（桶内求和） }
-        conns: { type: integer, format: int64, description: 桶内连接数最大值 }
-    TrafficSeriesResp:
-      type: object
-      required: [inst_id, scope, key, step, points]
-      properties:
-        inst_id: { type: string }
-        scope:   { type: string, enum: [server, proxy] }
-        key:     { type: string }
-        step:    { type: integer, format: int64 }
-        points:
-          type: array
-          items: { $ref: '#/components/schemas/TrafficPoint' }
+        ts: { type: integer, format: int64, description: unix 秒 }
+        in: { type: number, description: 请求数增量（非字节）}
+        out: { type: number, description: 错误数增量（非字节）}
+        conns: { type: number, description: HA 连接数 gauge }
 
-    # ----- 告警 -----
     AlertRule:
       type: object
-      required: [name, metric, op, threshold]
+      description: 用户定义的阈值告警规则（snake_case）
+      required: [name, metric, op]
       properties:
-        id:          { type: string, description: 缺省时服务端自动生成 `rule_xxxxxx` }
-        name:        { type: string }
-        enabled:     { type: boolean }
-        inst_id:     { type: string, description: '目标实例 ID；`*` 或缺省表示全部' }
+        id: { type: string, description: 省略时自动生成 }
+        name: { type: string }
+        enabled: { type: boolean }
+        inst_id: { type: string, description: "目标实例 id；\"*\" 表示全部" }
         metric:
           type: string
-          enum: [conns, traffic_in_rate, traffic_out_rate]
+          enum: [conns, requests_rate, errors_rate, traffic_in_rate, traffic_out_rate]
+          description: "conns | requests_rate | errors_rate（traffic_in_rate / traffic_out_rate 为遗留别名）"
         op:
           type: string
           enum: [">", ">=", "<", "<="]
-        threshold:   { type: number }
-        for_seconds: { type: integer, description: 持续多少秒才触发（debounce） }
-        target:      { type: string, description: '代理名；空或 `*` 表示 server scope' }
-        webhook:     { type: string, description: '可选 POST 回调 URL（fire/resolve 都会发）' }
+        threshold: { type: number }
+        for_seconds: { type: integer, description: 必须持续多久才触发（去抖）}
+        target: { type: string, description: "代理名，或 \"\" / \"*\" 表示 server 范围" }
+        webhook: { type: string, description: 触发 / 恢复时可选 POST 的 URL }
+
     AlertEvent:
       type: object
-      required: [id, rule_id, inst_id, target, fired_at, resolved_at, value, state]
+      description: 告警的触发 / 恢复事件（snake_case）
       properties:
-        id:          { type: string }
-        rule_id:     { type: string }
-        inst_id:     { type: string }
-        target:      { type: string }
-        fired_at:    { type: integer, format: int64 }
-        resolved_at: { type: integer, format: int64, description: 0 = 仍在 firing }
-        value:       { type: number }
-        state:
-          type: string
-          enum: [firing, resolved]
+        id: { type: string }
+        rule_id: { type: string }
+        inst_id: { type: string }
+        target: { type: string }
+        fired_at: { type: integer, format: int64, description: unix 秒 }
+        resolved_at: { type: integer, format: int64, description: 0 表示仍在触发 }
+        value: { type: number }
+        state: { type: string, enum: [firing, resolved] }
 
-    # ----- WS 事件 -----
     Event:
       type: object
-      required: [seq, type, ts]
+      description: WebSocket /events 推送的单条事件帧
       properties:
-        seq:       { type: integer, format: int64, description: 单调自增序号，可用于 since 回放 }
+        seq: { type: integer, format: int64 }
         type:
           type: string
-          enum:
-            - instance.state
-            - instance.error
-            - proxy.status
-            - proxy.connections
-            - config.changed
-            - config.deleted
-            - log.line
-            - alert
+          enum: [instance.state, instance.error, config.changed, config.deleted, alert]
         config_id: { type: string }
-        ts:        { type: string, format: date-time }
-        data:      { type: object, additionalProperties: true }
+        ts: { type: string, format: date-time }
+        data: { type: object, additionalProperties: true, description: 类型相关的载荷 }
 
-    # ----- frps 原生 /api/serverinfo 形状（camelCase；透传） -----
-    ServerOverview:
+    BinaryItem:
       type: object
-      description: |
-        守护进程从 worker loopback 透传 frps `/api/serverinfo` 的响应（camelCase
-        原生 JSON）。下面只列高频字段，其它字段通过 `additionalProperties: true`
-        宽容上游变化。
-      additionalProperties: true
+      description: 一个本地已安装的 cloudflared 版本（snake_case）
       properties:
-        version:           { type: string }
-        bindPort:          { type: integer }
-        vhostHTTPPort:     { type: integer }
-        vhostHTTPSPort:    { type: integer }
-        kcpBindPort:       { type: integer }
-        quicBindPort:      { type: integer }
-        subdomainHost:     { type: string }
-        maxPoolCount:      { type: integer }
-        maxPortsPerClient: { type: integer }
-        heartbeatTimeout:  { type: integer }
-        totalTrafficIn:    { type: integer, format: int64 }
-        totalTrafficOut:   { type: integer, format: int64 }
-        curConns:          { type: integer }
-        clientCounts:      { type: integer }
-        proxyTypeCount:
-          type: object
-          additionalProperties: { type: integer }
+        version: { type: string }
+        path: { type: string }
+        sha256: { type: string }
+        source_url: { type: string }
+        mirror: { type: string }
+        downloaded_at: { type: string, format: date-time }
+        size_bytes: { type: integer, format: int64 }
+        verified: { type: boolean }
+        is_active: { type: boolean }
+
+    AvailableRelease:
+      type: object
+      description: GitHub 上一个可下载的 cloudflared release（snake_case）
+      properties:
+        tag_name: { type: string }
+        published_at: { type: string, format: date-time }
+        html_url: { type: string }
+        asset_url: { type: string }
+        sha256: { type: string }
+
+    VersionMeta:
+      type: object
+      description: 安装一个 cloudflared 版本后持久化的元数据（snake_case）
+      properties:
+        version: { type: string }
+        platform: { type: string }
+        arch: { type: string }
+        asset_name: { type: string }
+        sha256: { type: string }
+        source_url: { type: string }
+        mirror: { type: string }
+        downloaded_at: { type: string, format: date-time }
+        size_bytes: { type: integer, format: int64 }
+        verified: { type: boolean }
+
+    VersionCheck:
+      type: object
+      description: "GET /version/check 的响应；获取最新版失败时仅含 current / *_enabled / has_update=false / can_self_update=false / reason / check_error。"
+      properties:
+        current: { type: string }
+        latest: { type: string }
+        deployment_mode: { type: string }
+        self_update_enabled: { type: boolean }
+        has_update: { type: boolean }
+        can_self_update: { type: boolean }
+        reason: { type: string }
+        changelog: { type: string }
+        html_url: { type: string }
+        published_at: { type: string, format: date-time }
+        check_error: { type: string }

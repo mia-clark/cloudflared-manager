@@ -18,9 +18,11 @@ services:
     image: cloudflared-manager:${VERSION:-dev}
     container_name: cfdmgrd
     restart: unless-stopped
-    # host network is recommended for frpc so that xtcp / NAT hole
-    # punching works correctly. Switch to bridge if you only need plain
-    # tcp/http proxies and want stricter isolation.
+    # cloudflared connectors are OUTBOUND-only (QUIC/HTTP2 to the Cloudflare
+    # edge) and need no inbound ports or NAT hole punching, so host networking
+    # is NOT required. We keep it only so the manager's web port is reachable
+    # without an explicit ports: mapping. For stricter isolation switch to the
+    # default bridge network and add e.g. ports: ["8080:8080"].
     network_mode: host
     environment:
       CFDM_API_TOKEN: ${CFDM_API_TOKEN:?api token required (set in .env)}
