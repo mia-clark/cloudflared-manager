@@ -11,16 +11,14 @@ import (
 	"time"
 
 	"github.com/mia-clark/cloudflared-manager/internal/eventbus"
+	"github.com/mia-clark/cloudflared-manager/internal/process"
 	"github.com/mia-clark/cloudflared-manager/pkg/cfdstate"
 	"github.com/mia-clark/cloudflared-manager/pkg/util"
 )
 
-// instance owns a single frps server lifecycle. Unlike the old frpc model
-// (one in-process client.Service + status poller), each running frps lives
-// in its own re-exec'd child process (frps-worker) — because frps's
-// mem.StatsCollector is a process-global singleton and cannot separate
-// metrics across multiple in-process servers. The Manager holds these
-// inside a map keyed by config id.
+// instance owns a single cloudflared connector lifecycle. Each running
+// instance lives in its own external process supervised by
+// internal/process.Worker — there is no longer any re-exec-self magic.
 type instance struct {
 	id   string
 	path string
@@ -32,23 +30,21 @@ type instance struct {
 	stopAt  time.Time
 
 	// run-time fields (zero unless running)
-	w      *worker
+	w      *process.Worker
 	cancel context.CancelFunc
 
 	logger  *slog.Logger
 	bus     *eventbus.Bus
-	selfExe string
 	logSink io.Writer
 }
 
-func newInstance(id, path string, logger *slog.Logger, bus *eventbus.Bus, selfExe string, logSink io.Writer) *instance {
+func newInstance(id, path string, logger *slog.Logger, bus *eventbus.Bus, logSink io.Writer) *instance {
 	return &instance{
 		id:      id,
 		path:    path,
 		state:   cfdstate.ConfigStateStopped,
 		logger:  logger.With(slog.String("config_id", id)),
 		bus:     bus,
-		selfExe: selfExe,
 		logSink: logSink,
 	}
 }
@@ -56,27 +52,25 @@ func newInstance(id, path string, logger *slog.Logger, bus *eventbus.Bus, selfEx
 // ID returns the immutable config id (file stem).
 func (i *instance) ID() string { return i.id }
 
-// Path returns the absolute path of the underlying .toml file.
+// Path returns the absolute path of the underlying config file.
 func (i *instance) Path() string { return i.path }
 
-// Snapshot describes the run-time status of one instance. Per-proxy runtime
-// data is no longer part of this snapshot — for frps, proxies are registered
-// by clients at runtime and are surfaced via the read-only /runtime endpoints
-// (P2), not derived from the config.
+// Snapshot describes the run-time status of one instance.
 type Snapshot struct {
-	ID        string     `json:"id"`
-	Name      string     `json:"name"`
-	Path      string     `json:"path"`     // toml 配置文件路径
-	LogPath   string     `json:"log_path"` // 管理器接管该实例 worker 输出的日志文件路径
-	State     string     `json:"state"`
-	LastError string     `json:"last_error,omitempty"`
-	StartedAt *time.Time `json:"started_at,omitempty"`
-	StoppedAt *time.Time `json:"stopped_at,omitempty"`
+	ID            string     `json:"id"`
+	Name          string     `json:"name"`
+	Path          string     `json:"path"` // config 文件路径（PR-08 后为 .yaml）
+	LogPath       string     `json:"log_path"`
+	State         string     `json:"state"`
+	LastError     string     `json:"last_error,omitempty"`
+	StartedAt     *time.Time `json:"started_at,omitempty"`
+	StoppedAt     *time.Time `json:"stopped_at,omitempty"`
+	BinaryVersion string     `json:"binary_version,omitempty"` // 该实例当前使用的 cloudflared 版本，PR-05 起填充
+	PID           int        `json:"pid,omitempty"`            // 子进程 pid，0 表示未运行
 }
 
-// Snapshot returns a JSON-friendly status view. Name is left empty here and
-// injected by the Manager from meta.json (the instance no longer holds config
-// data in memory).
+// Snapshot returns a JSON-friendly status view. Name / LogPath are
+// injected by the Manager from meta.json + LogsDir respectively.
 func (i *instance) Snapshot() Snapshot {
 	i.mu.RLock()
 	defer i.mu.RUnlock()
@@ -93,6 +87,9 @@ func (i *instance) Snapshot() Snapshot {
 	if !i.stopAt.IsZero() {
 		t := i.stopAt
 		s.StoppedAt = &t
+	}
+	if i.w != nil {
+		s.PID = i.w.PID()
 	}
 	return s
 }
@@ -129,8 +126,14 @@ func (i *instance) setState(s cfdstate.ConfigState) bool {
 	return true
 }
 
-// start spawns the frps worker child process and waits for its handshake.
-// It is a no-op if the instance is already running.
+// start spawns the cloudflared subprocess.
+//
+// PR-04 transitional behaviour: argv is the minimal ["tunnel",
+// "--no-autoupdate", "run"], BinaryPath is "cloudflared" (PATH lookup).
+// No token / TUNNEL_* env is set yet — that lands in PR-08 when the
+// API layer projects TunnelConfigV1 onto cfdflags.Options. In practice
+// this means PR-04 spawns will fail on most hosts (no cloudflared in
+// PATH, or no token → cloudflared exits early). That is expected.
 func (i *instance) start(ctx context.Context) error {
 	i.mu.Lock()
 	if i.state == cfdstate.ConfigStateStarted || i.state == cfdstate.ConfigStateStarting {
@@ -142,22 +145,26 @@ func (i *instance) start(ctx context.Context) error {
 	i.mu.Unlock()
 
 	runCtx, cancel := context.WithCancel(ctx)
-	w, err := spawnWorker(runCtx, i.id, i.selfExe, i.path, i.logSink)
+	w, err := process.Spawn(runCtx, process.SpawnParams{
+		BinaryPath:   "cloudflared",
+		Args:         []string{"tunnel", "--no-autoupdate", "run"},
+		LogSink:      i.logSink,
+		StartupGrace: 5 * time.Second,
+		StopGrace:    5 * time.Second,
+	})
 	if err != nil {
 		cancel()
 		i.recordError(err)
 		i.setState(cfdstate.ConfigStateStopped)
-		return fmt.Errorf("spawn frps worker: %w", err)
+		return fmt.Errorf("spawn cloudflared: %w", err)
 	}
 	i.mu.Lock()
 	i.w = w
 	i.cancel = cancel
 	i.mu.Unlock()
 
-	// Watch for child exit (crash / self-exit) → sync state. reap() is the
-	// sole owner of cmd.Wait(); stop() coordinates via the worker's done chan.
 	go func() {
-		w.reap()
+		<-w.Done()
 		i.mu.Lock()
 		stopping := i.state == cfdstate.ConfigStateStopping
 		i.w = nil
@@ -165,17 +172,20 @@ func (i *instance) start(ctx context.Context) error {
 		i.mu.Unlock()
 		cancel()
 		if !stopping {
+			if exitErr := w.ExitErr(); exitErr != nil {
+				i.recordError(fmt.Errorf("cloudflared exited: %w", exitErr))
+			}
 			i.setState(cfdstate.ConfigStateStopped)
-			i.logger.Info("frps worker exited")
+			i.logger.Info("cloudflared exited", slog.Int("pid", w.PID()))
 		}
 	}()
 
 	i.setState(cfdstate.ConfigStateStarted)
-	i.logger.Info("frps instance started", slog.String("loopback", w.hs.Addr))
+	i.logger.Info("cloudflared instance started", slog.Int("pid", w.PID()))
 	return nil
 }
 
-// stop terminates the worker child process and waits for it to be reaped.
+// stop terminates the child process and waits for it to be reaped.
 func (i *instance) stop() error {
 	i.mu.Lock()
 	if i.state == cfdstate.ConfigStateStopped || i.state == cfdstate.ConfigStateStopping {
@@ -188,7 +198,7 @@ func (i *instance) stop() error {
 	i.mu.Unlock()
 
 	if w != nil {
-		_ = w.stop()
+		_ = w.Stop()
 	}
 	if cancel != nil {
 		cancel()
@@ -198,29 +208,17 @@ func (i *instance) stop() error {
 	i.cancel = nil
 	i.mu.Unlock()
 	i.setState(cfdstate.ConfigStateStopped)
-	i.logger.Info("frps instance stopped")
+	i.logger.Info("cloudflared instance stopped")
 	return nil
 }
 
-// reload for frps means restart: server-side parameter changes require a
-// fresh process to take effect (there is no in-place hot reload for the
-// server skeleton). We are honest about this rather than pretending.
+// reload = stop + start. cloudflared has no in-place reload for
+// per-connector settings; restart is the only correct path.
 func (i *instance) reload(ctx context.Context) error {
 	if err := i.stop(); err != nil {
 		return err
 	}
 	return i.start(ctx)
-}
-
-// loopback returns the running worker's loopback address + credentials, used
-// by the P2 poller to read frps's mem stats and /api/clients.
-func (i *instance) loopback() (handshake, bool) {
-	i.mu.RLock()
-	defer i.mu.RUnlock()
-	if i.w == nil {
-		return handshake{}, false
-	}
-	return i.w.hs, true
 }
 
 func (i *instance) recordError(err error) {
@@ -236,8 +234,7 @@ func (i *instance) recordError(err error) {
 	}
 }
 
-// idFromPath derives a config id from a file path. The id is the file
-// name without its extension.
+// idFromPath derives a config id from a file path (file stem).
 func idFromPath(path string) string {
 	return util.FileNameWithoutExt(filepath.Base(path))
 }

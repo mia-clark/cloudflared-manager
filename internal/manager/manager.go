@@ -28,9 +28,11 @@ type Options struct {
 	Bus         *eventbus.Bus
 }
 
-// Manager is the central registry of frps instances. It owns the
-// /data/profiles directory and gates every read/write to config files.
-// Each running frps lives in its own re-exec'd child process (see worker.go).
+// Manager is the central registry of cloudflared connector instances.
+// It owns the {data_dir}/profiles directory and gates every read/write
+// to config files. Each running connector lives in its own external
+// child process supervised by internal/process.Worker (PR-04 replaced
+// the previous frps re-exec-self model).
 type Manager struct {
 	opts Options
 
@@ -39,8 +41,6 @@ type Manager struct {
 	logs      map[string]*instanceLog // per-id append log writers
 
 	meta *metaStore
-
-	selfExePath string
 
 	rootCtx    context.Context
 	rootCancel context.CancelFunc
@@ -59,25 +59,24 @@ func New(opts Options) (*Manager, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open meta: %w", err)
 	}
-	exe, _ := selfExe()
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Manager{
-		opts:        opts,
-		instances:   make(map[string]*instance),
-		logs:        make(map[string]*instanceLog),
-		meta:        meta,
-		selfExePath: exe,
-		rootCtx:     ctx,
-		rootCancel:  cancel,
+		opts:       opts,
+		instances:  make(map[string]*instance),
+		logs:       make(map[string]*instanceLog),
+		meta:       meta,
+		rootCtx:    ctx,
+		rootCancel: cancel,
 	}, nil
 }
 
 // Bus exposes the event bus so the API layer can subscribe.
 func (m *Manager) Bus() *eventbus.Bus { return m.opts.Bus }
 
-// LoadAll scans the profiles dir and registers every parseable frps TOML as
-// an instance in the stopped state. Unreadable / unparseable files are
-// logged and skipped.
+// LoadAll scans the profiles dir and registers every parseable config
+// file as an instance in the stopped state. PR-04 still parses frps
+// TOML transitionally; PR-08 will switch to YAML + TunnelConfigV1.
+// Unreadable / unparseable files are logged and skipped.
 func (m *Manager) LoadAll() error {
 	files, err := filepath.Glob(filepath.Join(m.opts.ProfilesDir, "*.toml"))
 	if err != nil {
@@ -102,7 +101,7 @@ func (m *Manager) LoadAll() error {
 // register builds and stores an instance for id at path. Caller must ensure
 // the file exists and parses.
 func (m *Manager) register(id, path string) *instance {
-	inst := newInstance(id, path, m.opts.Logger, m.opts.Bus, m.selfExePath, m.logWriter(id))
+	inst := newInstance(id, path, m.opts.Logger, m.opts.Bus, m.logWriter(id))
 	m.mu.Lock()
 	m.instances[id] = inst
 	m.mu.Unlock()
@@ -417,21 +416,6 @@ func (m *Manager) RunningIDs() []string {
 		}
 	}
 	return out
-}
-
-// Loopback returns the running worker's frps webServer loopback address and
-// credentials (HTTP Basic) for reading runtime metrics. ok=false if the
-// instance is not registered or not currently running.
-func (m *Manager) Loopback(id string) (addr, user, pass string, ok bool) {
-	inst := m.get(id)
-	if inst == nil {
-		return "", "", "", false
-	}
-	hs, running := inst.loopback()
-	if !running {
-		return "", "", "", false
-	}
-	return hs.Addr, hs.User, hs.Pass, true
 }
 
 // logWriter returns (creating if needed) the per-id append log writer that
