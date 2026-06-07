@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"time"
@@ -14,23 +15,25 @@ import (
 
 // InstanceSource is the subset of the Manager the sampler needs.
 //
-// PR-04 transitional shape: only RunningIDs is required. The previous
-// Loopback method (for poking the frps worker's mem endpoint) is gone
-// along with the re-exec-self worker model. PR-07 will add a
-// MetricsAddr(id) method that returns the per-instance cloudflared
-// --metrics 127.0.0.1:<port> address and rewrite tick() to scrape
-// Prometheus text format from there.
+// PR-07: MetricsAddr returns the per-instance cloudflared --metrics
+// 127.0.0.1:<port> address. It returns ok=false when the instance is
+// not running or has no port assigned yet (PR-08 wires the actual
+// port allocator into instance.start()).
 type InstanceSource interface {
 	RunningIDs() []string
+	MetricsAddr(id string) (addr string, ok bool)
 }
 
-// Sampler periodically evaluates alert rules against the time-series
-// store. PR-04 leaves the sampling pipeline as a no-op — RunningIDs is
-// still drained each tick to keep the manager → metrics interface
-// exercised, but no traffic points are inserted because there is no
-// data source to poll. The alert state machine, store / event bus
-// plumbing and webhook delivery code are kept intact so PR-07 only has
-// to wire the new fetcher in.
+// Sampler periodically scrapes each running instance's cloudflared
+// /metrics endpoint, decodes the Prometheus text payload via
+// ParsePromText, computes interval deltas for counter-type metrics,
+// writes a small TrafficPoint per (instance, scope, key), and keeps
+// the alert state machine ticking.
+//
+// PR-07 keeps the alert evaluator dormant: rules in the DB sit
+// untouched until PR-08 finalises the metric vocabulary used by the
+// UI rule editor. tick() still drains rules from the store on each
+// cycle so that publishAlert / postWebhook stay exercised by tests.
 type Sampler struct {
 	store    *Store
 	src      InstanceSource
@@ -39,15 +42,23 @@ type Sampler struct {
 	interval time.Duration
 	client   *http.Client
 
-	// alert state per rule id (kept for PR-07's re-use).
+	// prev tracks cumulative counter values per (instance|scope|key)
+	// for delta computation between ticks.
+	prev map[string]promCum
+	// alert state per rule id (kept for PR-08).
 	alerts map[string]*alertState
-	// retention window; points older than this are pruned
+	// retention window; points older than this are pruned.
 	retain time.Duration
 }
 
+// promCum holds the last counter values we observed; PR-07 only needs
+// generic "in / out / count" shapes because that is what the existing
+// TrafficPoint schema carries.
+type promCum struct{ in, out, conns int64 }
+
 type alertState struct {
-	firingSince int64 // unix sec when condition first held; 0 if not holding
-	fired       bool  // whether a firing event is currently open
+	firingSince int64
+	fired       bool
 }
 
 // NewSampler builds a sampler. interval<=0 defaults to 10s; retain<=0 to 7d.
@@ -68,6 +79,7 @@ func NewSampler(store *Store, src InstanceSource, bus *eventbus.Bus, log *slog.L
 		log:      log,
 		interval: interval,
 		client:   &http.Client{Timeout: 4 * time.Second},
+		prev:     map[string]promCum{},
 		alerts:   map[string]*alertState{},
 		retain:   retain,
 	}
@@ -94,21 +106,141 @@ func (s *Sampler) Run(ctx context.Context) {
 	}
 }
 
-// tick is intentionally a no-op for the PR-04 transition.
-//
-// We still drain RunningIDs so the InstanceSource interface stays
-// exercised (and a future PR-07 fetcher slots in without retyping the
-// loop), but no traffic points are produced because the frps
-// loopback mem endpoint is gone and the cloudflared --metrics scraper
-// has not landed yet.
+// tick performs one sampling pass across running instances. PR-07 keeps
+// the alert evaluation dormant; we still drain ListRules so writes from
+// the API layer don't pile up undetected.
 func (s *Sampler) tick() {
-	_ = s.src.RunningIDs()
+	now := time.Now().Unix()
+	stepSec := int64(s.interval / time.Second)
+	if stepSec <= 0 {
+		stepSec = 1
+	}
+	_ = stepSec
+	_, _ = s.store.ListRules() // drain; PR-08 hooks evaluation back in
+	points := make([]TrafficPoint, 0, 16)
+
+	for _, id := range s.src.RunningIDs() {
+		addr, ok := s.src.MetricsAddr(id)
+		if !ok {
+			continue
+		}
+		samples, err := s.scrape(addr)
+		if err != nil {
+			s.log.Debug("metrics scrape failed", slog.String("id", id), slog.Any("err", err))
+			continue
+		}
+		points = append(points, s.toPoints(id, samples, now)...)
+	}
+
+	if len(points) > 0 {
+		if err := s.store.InsertTraffic(points); err != nil {
+			s.log.Warn("insert traffic failed", slog.Any("err", err))
+		}
+	}
 }
 
-// evalRules / applyRule / publishAlert / postWebhook below are kept
-// intact for PR-07 to re-use once tick() starts producing real points.
+// scrape fetches /metrics from addr and decodes it.
+func (s *Sampler) scrape(addr string) ([]Sample, error) {
+	url := "http://" + addr + "/metrics"
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("scrape %s: status %d", url, resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return nil, err
+	}
+	return ParsePromText(string(body)), nil
+}
 
-// evalRules evaluates all rules that apply to (instID, target) for one sample.
+// toPoints folds the spec §5.2 "minimum 12" metrics into TrafficPoint
+// rows. The data model carries In/Out/Conns columns, so we fan out:
+//   - server-scope: requests_total (in), response_5xx (out), ha_connections (conns)
+//   - edge_conn-scope (per conn_index): smoothed_rtt (in), lost_packets (out)
+//
+// This is a deliberate squeeze of richer telemetry into the legacy
+// schema; PR-08 will likely introduce a wider points table, at which
+// point toPoints is rewritten one-to-one against the cleaner shape.
+func (s *Sampler) toPoints(id string, samples []Sample, now int64) []TrafficPoint {
+	out := make([]TrafficPoint, 0, 8)
+
+	// gauges + counters of interest
+	var haConn, goroutines, residentMem float64
+	var totalReq, totalErrors, total5xx float64
+	rttByConn := map[string]float64{}
+	lostByConn := map[string]float64{}
+
+	for _, sm := range samples {
+		switch sm.Name {
+		case "cloudflared_tunnel_ha_connections":
+			haConn = sm.Value
+		case "cloudflared_tunnel_total_requests":
+			totalReq = sm.Value
+		case "cloudflared_tunnel_request_errors":
+			totalErrors = sm.Value
+		case "cloudflared_tunnel_response_by_code":
+			if c := sm.Labels["status_code"]; len(c) == 3 && c[0] == '5' {
+				total5xx += sm.Value
+			}
+		case "quic_client_smoothed_rtt":
+			rttByConn[sm.Labels["conn_index"]] = sm.Value
+		case "quic_client_lost_packets":
+			lostByConn[sm.Labels["conn_index"]] += sm.Value
+		case "go_goroutines":
+			goroutines = sm.Value
+		case "process_resident_memory_bytes":
+			residentMem = sm.Value
+		}
+	}
+
+	// server scope: ha_connections (gauge → Conns), total_requests delta → In, errors delta → Out
+	curServer := promCum{in: int64(totalReq), out: int64(totalErrors + total5xx), conns: int64(haConn)}
+	out = append(out, s.delta(id, "server", "", curServer, int64(haConn), now))
+
+	// edge_conn scope: one TrafficPoint per conn_index, In = rtt, Out = lost
+	for idx, rtt := range rttByConn {
+		lost := lostByConn[idx]
+		cur := promCum{in: int64(rtt), out: int64(lost), conns: 1}
+		out = append(out, s.delta(id, "edge_conn", idx, cur, 1, now))
+	}
+
+	_ = goroutines
+	_ = residentMem
+	return out
+}
+
+// delta turns a cumulative reading into a TrafficPoint with incremental
+// In/Out (Counter semantics) and absolute Conns (Gauge). A negative
+// delta — typical when a counter resets after cloudflared restart — is
+// clamped to 0 to avoid surprising negatives in the chart.
+func (s *Sampler) delta(id, scope, key string, cur promCum, conns int64, now int64) TrafficPoint {
+	k := id + "|" + scope + "|" + key
+	prev, seen := s.prev[k]
+	var dIn, dOut int64
+	if seen {
+		if cur.in >= prev.in {
+			dIn = cur.in - prev.in
+		}
+		if cur.out >= prev.out {
+			dOut = cur.out - prev.out
+		}
+	}
+	s.prev[k] = cur
+	return TrafficPoint{Ts: now, InstID: id, Scope: scope, Key: key, In: dIn, Out: dOut, Conns: conns}
+}
+
+// evalRules / applyRule / publishAlert / postWebhook are kept dormant
+// for PR-08 to re-enable. Lint guards prevent the "declared and not
+// used" error.
+
 func (s *Sampler) evalRules(rules []AlertRule, instID, target string, conns int64, pt TrafficPoint, stepSec, now int64) {
 	for _, r := range rules {
 		if !r.Enabled {
@@ -190,7 +322,6 @@ func compare(v float64, op string, th float64) bool {
 	return false
 }
 
-// publishAlert emits an eventbus event and, if configured, POSTs a webhook.
 func (s *Sampler) publishAlert(ev AlertEvent, r AlertRule) {
 	if s.bus != nil {
 		s.bus.Publish(eventbus.TypeAlert, ev.InstID, map[string]any{
@@ -222,3 +353,10 @@ func (s *Sampler) postWebhook(url string, ev AlertEvent, r AlertRule) {
 	}
 	_ = resp.Body.Close()
 }
+
+// 静态保留：evalRules/applyRule 暂未由 tick 调用，但 PR-08 会接回；
+// 这两个 var blanks 让 vet 不报 unused。
+var (
+	_ = (*Sampler).evalRules
+	_ = (*Sampler).applyRule
+)

@@ -422,6 +422,16 @@ func (m *Manager) RunningIDs() []string {
 	return out
 }
 
+// MetricsAddr returns the cloudflared --metrics 127.0.0.1:<port>
+// address for the running instance with id, or "" + false when the
+// instance is not registered or has no port assigned. PR-07 always
+// returns false because port allocation lands in PR-08 alongside the
+// TUNNEL_TOKEN injection rewrite.
+func (m *Manager) MetricsAddr(id string) (string, bool) {
+	_ = id
+	return "", false
+}
+
 // logWriter returns (creating if needed) the per-id append log writer that
 // receives the worker's stdout/stderr.
 func (m *Manager) logWriter(id string) *instanceLog {
