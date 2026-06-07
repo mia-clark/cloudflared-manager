@@ -336,7 +336,8 @@ func (m *Manager) Stop(id string) error {
 	return inst.stop()
 }
 
-// Reload restarts the underlying frps service (server params need a restart).
+// Reload restarts the cloudflared instance (connector params need a restart;
+// there is no in-place reload).
 func (m *Manager) Reload(id string) error {
 	inst := m.get(id)
 	if inst == nil {

@@ -9,10 +9,11 @@ import (
 )
 
 // Meta is the persisted daemon-level metadata stored at /data/meta.json.
-// It tracks the user-defined display order. Whether an instance auto-
-// starts on daemon boot is now driven by frpsmgr.manualStart inside each
-// config file; the legacy AutoStart list is kept only so old meta.json
-// files round-trip without losing the key.
+// It tracks the user-defined display order plus per-id display names and
+// the manual-start flags. Whether an instance auto-starts on daemon boot is
+// driven by the Manual map here (set via the API's cfdmgr.manualStart), NOT
+// by anything inside the profile YAML. The legacy AutoStart list is kept
+// only so old meta.json files round-trip without losing the key.
 type Meta struct {
 	Version      int               `json:"version"`
 	AutoStart    []string          `json:"auto_start"`

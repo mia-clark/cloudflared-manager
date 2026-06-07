@@ -191,10 +191,27 @@ func trimLines(in []string) []string {
 	return out
 }
 
-// parseLogLineTimestamp 从 frp 日志行首解析时间戳（毫秒精度）。
-// frp 行格式："2026-06-03 15:18:20.546 [D] ..."（util.log 包默认 layout）。
-// 解析失败时 ok=false，调用方应当默认保留这一行。
+// parseLogLineTimestamp 解析一行日志的时间戳（毫秒精度），用于「清空日志」
+// 水位过滤。支持两种格式：
+//   - cloudflared --output=json：{"level":...,"time":"2026-06-07T18:42:09.9Z",...}
+//   - 旧 frp 文本行："2026-06-03 15:18:20.546 [D] ..."（向后兼容）
+// 解析失败时 ok=false，调用方默认保留这一行。
 func parseLogLineTimestamp(line string) (unixMilli int64, ok bool) {
+	line = strings.TrimSpace(line)
+	// cloudflared 结构化 JSON 行：提取 "time":"<RFC3339>"。
+	if strings.HasPrefix(line, "{") {
+		const key = `"time":"`
+		if i := strings.Index(line, key); i >= 0 {
+			rest := line[i+len(key):]
+			if j := strings.IndexByte(rest, '"'); j > 0 {
+				if t, err := time.Parse(time.RFC3339Nano, rest[:j]); err == nil {
+					return t.UnixMilli(), true
+				}
+			}
+		}
+		return 0, false
+	}
+	// 旧 frp 文本布局。
 	const layout = "2006-01-02 15:04:05.000"
 	if len(line) < len(layout) {
 		return 0, false

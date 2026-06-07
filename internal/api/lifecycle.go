@@ -36,7 +36,8 @@ func (h *LifecycleHandler) Stop(w http.ResponseWriter, r *http.Request) {
 	h.writeStatus(w, id)
 }
 
-// Reload hot-reloads the underlying frp service.
+// Reload restarts the instance (cloudflared has no in-place reload; the
+// manager performs a stop + start).
 func (h *LifecycleHandler) Reload(w http.ResponseWriter, r *http.Request) {
 	id := pathID(r)
 	if err := h.m.Reload(id); err != nil {
