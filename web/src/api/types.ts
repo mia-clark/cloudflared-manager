@@ -4,11 +4,13 @@
 //   - internal/api/configs.go         (configEnvelope / createReq)
 //   - internal/manager/instance.go    (Snapshot, snake_case JSON)
 //   - internal/manager/manager.go     (MgrMeta, camelCase JSON)
-//   - pkg/config/tunnel.go            (TunnelConfigV1, camelCase)
-//   - internal/api/binaries.go        (BinaryItem / BinaryList)
+//   - pkg/cfdconfig/tunnel.go         (TunnelConfigV1, camelCase)
+//   - internal/cfdbin/store.go        (InstalledVersion → BinaryItem)
+//   - internal/cfdbin/download.go     (AvailableRelease)
+//   - internal/metrics/store_alerts.go(AlertRule / AlertEvent)
 //
-// snake_case：Snapshot / LogEntry / TrafficPoint / AlertRule / AlertEvent
-// camelCase：MgrMeta / TunnelConfigV1 / BinaryMeta
+// snake_case：Snapshot / BinaryItem / AvailableRelease / TrafficPoint / AlertRule / AlertEvent
+// camelCase：MgrMeta / TunnelConfigV1 子树
 
 // ── 实例快照（snake_case）────────────────────────────────────────────────────
 export interface Snapshot {
@@ -20,6 +22,9 @@ export interface Snapshot {
   last_error?: string;
   started_at?: string;
   stopped_at?: string;
+  binary_version?: string;
+  pid?: number;
+  metrics_port?: number;
 }
 
 // ── 管理器元数据（camelCase）─────────────────────────────────────────────────
@@ -28,22 +33,38 @@ export interface MgrMeta {
   manualStart: boolean;
 }
 
-// ── cloudflared 隧道配置（camelCase，对应 TunnelConfigV1）──────────────────
-// 极简子集；未知字段用索引签名保留（透传时不丢）。
-export interface TunnelIngressRule {
-  hostname?: string;
-  path?: string;
-  service: string;
-  originRequest?: Record<string, unknown>;
-  [key: string]: unknown;
+// ── cloudflared 隧道配置（camelCase，对应 pkg/cfdconfig.TunnelConfigV1）─────────
+// token 模式：仅建模 connector 进程消费的参数。ingress / public-hostname /
+// origin 配置在 Cloudflare Zero Trust dashboard 管理，不在此处。
+export interface TunnelEdgeConfig {
+  protocol?: 'auto' | 'http2' | 'quic';
+  edgeIpVersion?: 'auto' | '4' | '6';
+  edgeBindAddress?: string;
+  region?: '' | 'us';
+  postQuantum?: boolean;
 }
-
+export interface TunnelReliabilityConfig {
+  retries?: number;
+  gracePeriod?: string;
+}
+export interface TunnelLoggingConfig {
+  logLevel?: string;
+  transportLogLevel?: string;
+}
+export interface TunnelIdentityConfig {
+  label?: string;
+  tags?: Record<string, string>;
+}
 export interface TunnelConfigV1 {
-  tunnel?: string;
-  credentials_file?: string;
+  // token 永不由 API 回传（后端脱敏）；提交时留空表示"保持现有"。
   token?: string;
-  ingress?: TunnelIngressRule[];
-  warp_routing?: { enabled?: boolean; [key: string]: unknown };
+  edge?: TunnelEdgeConfig;
+  reliability?: TunnelReliabilityConfig;
+  logging?: TunnelLoggingConfig;
+  identity?: TunnelIdentityConfig;
+  advancedEnvOverrides?: Record<string, string>;
+  binaryVersion?: string;
+  // 未知字段透传保留（前向兼容）。
   [key: string]: unknown;
 }
 
@@ -51,6 +72,8 @@ export interface TunnelConfigV1 {
 export interface ConfigEnvelope extends Snapshot {
   config: TunnelConfigV1;
   cfdmgr: MgrMeta;
+  // 是否已存储 token（明文不回传，仅此标志 + GET /configs/{id}/token 掩码）。
+  has_token?: boolean;
 }
 
 // ── 列表响应 ─────────────────────────────────────────────────────────────────
@@ -65,6 +88,13 @@ export interface ValidateResp {
   warnings?: string[];
 }
 
+// ── 令牌掩码（GET /configs/{id}/token）───────────────────────────────────────
+export interface TokenInfo {
+  has_token: boolean;
+  masked: string;
+  length: number;
+}
+
 // ── 日志条目（snake_case）────────────────────────────────────────────────────
 export interface LogEntry {
   time: string;
@@ -75,36 +105,39 @@ export interface LogEntry {
   [key: string]: unknown;
 }
 
-// ── 二进制管理（snake_case）──────────────────────────────────────────────────
+// ── 二进制管理（snake_case，对应 cfdbin.InstalledVersion）─────────────────────
 export interface BinaryItem {
   version: string;
   path: string;
-  size: number;
-  downloaded_at: string;
-  is_active: boolean;
+  sha256?: string;
+  source_url?: string;
+  mirror?: string;
+  downloaded_at?: string;
+  size_bytes?: number;
   verified?: boolean;
+  is_active: boolean;
 }
 
 export interface BinaryList {
   items: BinaryItem[];
-  active_version?: string;
 }
 
+// ── 可下载版本（snake_case，对应 cfdbin.AvailableRelease）──────────────────────
 export interface AvailableRelease {
-  version: string;
   tag_name: string;
   published_at: string;
-  download_url?: string;
-  size?: number;
-  pre_release?: boolean;
+  html_url: string;
+  asset_url?: string;
+  sha256?: string;
 }
 
-export interface BinaryMeta {
-  available: AvailableRelease[];
-  current_version?: string;
+export interface AvailableList {
+  items: AvailableRelease[];
 }
 
 // ── 历史流量（snake_case）────────────────────────────────────────────────────
+// 注意：cloudflared 无 per-tunnel 字节计数器；in = 请求数增量，out = 错误数增量，
+// conns = HA 连接数（非字节）。
 export interface TrafficPoint {
   ts: number;
   in: number;
@@ -124,7 +157,14 @@ export interface TrafficSeries {
 }
 
 // ── 告警（snake_case）────────────────────────────────────────────────────────
-export type AlertMetric = 'conns' | 'traffic_in_rate' | 'traffic_out_rate';
+// conns = HA 连接数；requests_rate = 请求/秒；errors_rate = 错误/秒。
+// （traffic_in_rate / traffic_out_rate 为旧别名，后端仍接受。）
+export type AlertMetric =
+  | 'conns'
+  | 'requests_rate'
+  | 'errors_rate'
+  | 'traffic_in_rate'
+  | 'traffic_out_rate';
 export type AlertOp = '>' | '>=' | '<' | '<=';
 
 export interface AlertRule {

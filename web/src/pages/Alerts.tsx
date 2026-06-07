@@ -34,10 +34,12 @@ import { fmtDateTime } from '../utils/time';
 
 const { Title, Text } = Typography;
 
+// cloudflared 无 per-tunnel 字节计数器：requests_rate=请求/秒，errors_rate=错误/秒，
+// conns=HA 连接数。（旧 traffic_in_rate/traffic_out_rate 后端仍接受，仅作兼容。）
 const METRIC_OPTS = [
-  { value: 'conns', label: '连接数 (conns)' },
-  { value: 'traffic_in_rate', label: '入站速率 (traffic_in_rate)' },
-  { value: 'traffic_out_rate', label: '出站速率 (traffic_out_rate)' },
+  { value: 'conns', label: 'HA 连接数 (conns)' },
+  { value: 'requests_rate', label: '请求速率·次/秒 (requests_rate)' },
+  { value: 'errors_rate', label: '错误速率·次/秒 (errors_rate)' },
 ];
 const OP_OPTS = [
   { value: '>', label: '>' },

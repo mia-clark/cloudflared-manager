@@ -4,7 +4,7 @@ import type {
   ConfigEnvelope,
   ValidateResp,
   BinaryList,
-  BinaryMeta,
+  AvailableList,
   BinaryItem,
 } from './types';
 
@@ -79,11 +79,12 @@ export const configsApi = {
 
 export const binariesApi = {
   list: () => client.get<BinaryList>('/api/v1/binaries'),
-  available: () => client.get<BinaryMeta>('/api/v1/binaries/available'),
+  available: () => client.get<AvailableList>('/api/v1/binaries/available'),
   install: (version: string) =>
     client.post<BinaryItem>('/api/v1/binaries/install', { version }),
+  // 后端路由是 POST /binaries/{version}/activate —— version 在路径里，不在 body。
   activate: (version: string) =>
-    client.post('/api/v1/binaries/activate', { version }),
+    client.post(`/api/v1/binaries/${encodeURIComponent(version)}/activate`),
   delete: (version: string) => client.delete(`/api/v1/binaries/${encodeURIComponent(version)}`),
 };
 

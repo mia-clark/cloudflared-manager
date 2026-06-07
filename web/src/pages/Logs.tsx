@@ -66,13 +66,13 @@ const Logs: React.FC = () => {
           let state = 'stopped';
           try {
             const stResp = await client.get(`/api/v1/configs/${item.id}/status`);
-            state = stResp.data?.status || stResp.data?.state || 'stopped';
+            state = stResp.data?.state || 'stopped';
           } catch {
             // ignore
           }
           return {
             id: item.id,
-            name: item.name || item.frpsmgr?.name || item.id,
+            name: item.name || item.id,
             status: state,
           };
         }));

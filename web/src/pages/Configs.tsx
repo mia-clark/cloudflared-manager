@@ -20,6 +20,7 @@ import { StreamLanguage } from '@codemirror/language';
 import { yaml as yamlMode } from '@codemirror/legacy-modes/mode/yaml';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { EditorView } from '@codemirror/view';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 
 import client from '../api/client';
 import { useTheme } from '../theme/ThemeContext';
@@ -37,60 +38,21 @@ const yamlFontTheme = EditorView.theme({
   '.cm-scroller': { lineHeight: '1.55' },
 });
 
-// 简单的 yaml stringify（仅用于展示；保存时直接发 yaml 文本通过 raw 接口）
-function toYaml(obj: unknown, indent = 0): string {
-  if (obj === null || obj === undefined) return 'null';
-  if (typeof obj === 'string') {
-    if (obj.includes('\n') || obj.includes('"') || obj.includes(':')) {
-      return `"${obj.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
-    }
-    return obj;
-  }
-  if (typeof obj === 'boolean' || typeof obj === 'number') return String(obj);
-  if (Array.isArray(obj)) {
-    if (obj.length === 0) return '[]';
-    const pad = ' '.repeat(indent + 2);
-    return obj.map((v) => `\n${pad}- ${toYaml(v, indent + 2)}`).join('');
-  }
-  if (typeof obj === 'object') {
-    const entries = Object.entries(obj as Record<string, unknown>).filter(
-      ([, v]) => v !== undefined && v !== null
-    );
-    if (entries.length === 0) return '{}';
-    const pad = ' '.repeat(indent + 2);
-    return entries.map(([k, v]) => `\n${pad}${k}: ${toYaml(v, indent + 2)}`).join('');
-  }
-  return String(obj);
-}
-
+// 用真正的 YAML 库做双向转换。cloudflared 配置是嵌套结构
+// (edge/reliability/logging/identity)，旧的扁平解析会把嵌套字段拍平丢失，
+// 导致保存时发出未知顶层键被后端 DisallowUnknownFields 拒绝(400)。
+//
+// token 永不进入 YAML 编辑器——它由独立的密码字段管理(留空=保持现有)，
+// 后端也已在响应里脱敏。
 function configToYaml(cfg: TunnelConfigV1): string {
+  const rest: Record<string, unknown> = { ...(cfg as Record<string, unknown>) };
+  delete rest.token;
   try {
-    return Object.entries(cfg)
-      .filter(([, v]) => v !== undefined && v !== null)
-      .map(([k, v]) => `${k}:${toYaml(v, 0)}`)
-      .join('\n');
+    const text = stringifyYaml(rest);
+    return text.trim() === '{}' ? '' : text;
   } catch {
     return '';
   }
-}
-
-// 极简 yaml → object（仅解析顶层 k: v；复杂 yaml 留给后端 /validate 校验）
-function parseSimpleYaml(text: string): Record<string, unknown> {
-  const result: Record<string, unknown> = {};
-  for (const line of text.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const colon = trimmed.indexOf(':');
-    if (colon < 0) continue;
-    const key = trimmed.slice(0, colon).trim();
-    const val = trimmed.slice(colon + 1).trim();
-    if (!key) continue;
-    if (val === 'true') result[key] = true;
-    else if (val === 'false') result[key] = false;
-    else if (val !== '' && !isNaN(Number(val))) result[key] = Number(val);
-    else if (val !== '') result[key] = val.replace(/^["']|["']$/g, '');
-  }
-  return result;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -116,6 +78,7 @@ const Configs: React.FC = () => {
   const [editingId, setEditingId] = useState<string | null>(null); // null = 新建
   const [yamlText, setYamlText] = useState('');
   const [saving, setSaving] = useState(false);
+  const [hasToken, setHasToken] = useState(false); // 编辑时：该实例是否已存储 token
 
   // 复制弹窗
   const [dupModalOpen, setDupModalOpen] = useState(false);
@@ -240,8 +203,9 @@ const Configs: React.FC = () => {
 
   const openCreate = () => {
     setEditingId(null);
+    setHasToken(false);
     form.resetFields();
-    setYamlText('# 在此输入 cloudflared 隧道 YAML 配置\n');
+    setYamlText('# cloudflared 隧道 YAML 配置（token 请填上方字段，勿写在此处）\nedge:\n  protocol: auto\nlogging:\n  logLevel: info\n');
     setModalOpen(true);
   };
 
@@ -253,9 +217,10 @@ const Configs: React.FC = () => {
       form.setFieldsValue({
         id: env.id,
         name: env.cfdmgr?.name || env.name || env.id,
-        token: (env.config as Record<string, unknown>)?.token as string || '',
+        token: '', // 永不回填明文 token（后端已脱敏）；留空 = 保持现有
         manualStart: env.cfdmgr?.manualStart ?? false,
       });
+      setHasToken(!!env.has_token);
       setYamlText(configToYaml(env.config || {}));
     } catch {
       message.error('获取配置详情失败');
@@ -272,8 +237,20 @@ const Configs: React.FC = () => {
       return;
     }
 
-    // 从 YAML 解析 config（简单版）；token 字段覆盖
-    const parsed = parseSimpleYaml(yamlText);
+    // 用真 YAML 解析（支持嵌套 edge/reliability/logging/identity）。
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = (parseYaml(yamlText) as Record<string, unknown>) || {};
+      if (typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('配置必须是 YAML 映射（key: value）');
+      }
+    } catch (e) {
+      message.error('YAML 解析失败：' + (e as Error).message);
+      return;
+    }
+    // token 永远由密码字段管理：先从 YAML 剔除，仅当用户填写了才提交；
+    // 留空时后端会保留实例现有 token。
+    delete parsed.token;
     if (values.token) parsed.token = values.token;
 
     const cfdmgr: MgrMeta = {
@@ -557,8 +534,14 @@ const Configs: React.FC = () => {
           <Form.Item label="显示名称" name="name">
             <Input placeholder="例如: 生产隧道" />
           </Form.Item>
-          <Form.Item label="Cloudflared Token（覆盖 YAML 中 token 字段）" name="token">
-            <Input.Password placeholder="留空则以 YAML 中 token 为准" />
+          <Form.Item
+            label="Cloudflared Token"
+            name="token"
+            extra={editingId
+              ? (hasToken ? '已设置；留空表示保持不变' : '尚未设置 token')
+              : '隧道 connector token（约 100+ 字符 base64）'}
+          >
+            <Input.Password placeholder={editingId && hasToken ? '留空 = 保持现有 token' : '粘贴 Cloudflare 隧道 token'} />
           </Form.Item>
           <Form.Item label="手动启动" name="manualStart" valuePropName="checked" initialValue={false}>
             <Switch checkedChildren="手动启动" unCheckedChildren="随服务启动" />

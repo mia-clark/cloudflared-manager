@@ -80,9 +80,9 @@ const Binaries: React.FC = () => {
     setCheckLoading(true);
     try {
       const resp = await binariesApi.available();
-      const releases = resp.data?.available || [];
+      const releases = resp.data?.items || [];
       setAvailable(releases);
-      setSelectedVer(releases[0]?.version || '');
+      setSelectedVer(releases[0]?.tag_name || '');
       setCheckModalOpen(true);
     } catch (err: unknown) {
       const e = err as { response?: { data?: { error?: { message?: string } } }; message?: string };
@@ -151,8 +151,8 @@ const Binaries: React.FC = () => {
     },
     {
       title: '大小',
-      dataIndex: 'size',
-      key: 'size',
+      dataIndex: 'size_bytes',
+      key: 'size_bytes',
       width: 100,
       render: (v: number) => formatBytes(v),
     },
@@ -291,12 +291,13 @@ const Binaries: React.FC = () => {
               value={selectedVer}
               onChange={setSelectedVer}
               options={available.map((r) => ({
-                value: r.version,
+                value: r.tag_name,
                 label: (
                   <Space size={8}>
-                    <Text strong style={{ fontFamily: 'monospace' }}>{r.version}</Text>
-                    {r.pre_release && <Tag color="orange">预发布</Tag>}
-                    {r.size ? <Text type="secondary" style={{ fontSize: 12 }}>{formatBytes(r.size)}</Text> : null}
+                    <Text strong style={{ fontFamily: 'monospace' }}>{r.tag_name}</Text>
+                    {r.published_at && (
+                      <Text type="secondary" style={{ fontSize: 12 }}>{fmtDateTime(r.published_at)}</Text>
+                    )}
                   </Space>
                 ),
               }))}

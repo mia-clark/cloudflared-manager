@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Card, Row, Col, Button, Input, Radio, Form, Upload, App, Typography, Space, Divider } from 'antd';
+import { Card, Row, Col, Button, Input, Form, Upload, App, Typography, Space, Divider } from 'antd';
 import {
   CloudDownloadOutlined,
   CloudUploadOutlined,
@@ -50,11 +50,9 @@ const ImportExport: React.FC = () => {
       await client.post('/api/v1/import/text', {
         id: values.id,
         text: values.text,
-        format: values.format || 'toml',
       });
       message.success(`文本配置 [${values.id}] 导入成功`);
       textForm.resetFields();
-      textForm.setFieldsValue({ format: 'toml' });
     } catch (err: any) {
       message.error('导入失败: ' + (err.response?.data?.error?.message || err.message));
     } finally {
@@ -161,34 +159,22 @@ const ImportExport: React.FC = () => {
         <Col xs={24} md={12}>
           <Card title={<Space><CodeOutlined /> 粘贴文本配置导入</Space>} style={cardStyle}>
             <Form form={textForm} layout="vertical" onFinish={handleImportText}>
-              <Row gutter={16}>
-                <Col span={14}>
-                  <Form.Item
-                    label="保存 ID 标识 (纯英文数字)"
-                    name="id"
-                    rules={[{ required: true, message: '请输入唯一ID标识' }]}
-                  >
-                    <Input placeholder="例如: office_linux" />
-                  </Form.Item>
-                </Col>
-                <Col span={10}>
-                  <Form.Item label="代码格式" name="format" initialValue="toml">
-                    <Radio.Group buttonStyle="solid">
-                      <Radio.Button value="toml">TOML</Radio.Button>
-                      <Radio.Button value="ini">INI</Radio.Button>
-                    </Radio.Group>
-                  </Form.Item>
-                </Col>
-              </Row>
+              <Form.Item
+                label="保存 ID 标识 (纯英文数字)"
+                name="id"
+                rules={[{ required: true, message: '请输入唯一ID标识' }]}
+              >
+                <Input placeholder="例如: office_linux" />
+              </Form.Item>
 
               <Form.Item
-                label="配置文件内容"
+                label="cloudflared 隧道配置（YAML）"
                 name="text"
                 rules={[{ required: true, message: '请输入配置代码' }]}
               >
                 <Input.TextArea
                   rows={8}
-                  placeholder={'[common]\nserver_addr = x.x.x.x\nserver_port = 7000\nauth.token = abcde'}
+                  placeholder={'token: eyJhIjoi...（Cloudflare 隧道 token）\nedge:\n  protocol: auto\nlogging:\n  logLevel: info'}
                   style={{ fontFamily: 'ui-monospace, "Fira Code", monospace', fontSize: 13 }}
                 />
               </Form.Item>
@@ -253,7 +239,7 @@ const ImportExport: React.FC = () => {
                   { type: 'url', message: '请输入有效的网络地址' },
                 ]}
               >
-                <Input placeholder="http://example.com/frps.toml" />
+                <Input placeholder="https://example.com/tunnel.yaml" />
               </Form.Item>
 
               <Form.Item style={{ marginBottom: 0, textAlign: 'right' }}>

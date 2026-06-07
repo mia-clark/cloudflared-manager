@@ -116,7 +116,7 @@ export function EventStreamProvider({ children }: { children: ReactNode }) {
     stoppedRef.current = false;
     connect();
     const onStorage = (e: StorageEvent) => {
-      if (e.key === 'frpsmgr_api_token') {
+      if (e.key === 'cfdmgr_api_token') {
         // token 变化时重连
         if (wsRef.current) wsRef.current.close();
         retriesRef.current = 0;
