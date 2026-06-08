@@ -293,7 +293,7 @@ func (s *Store) Install(ctx context.Context, d *Downloader, version string) (Ver
 // computed SHA, size, and the URL that actually served the bytes.
 func (d *Downloader) downloadWithFailover(ctx context.Context, downloadURL, destPath string) (string, int64, string, error) {
 	candidates := d.failoverURLs(downloadURL)
-	var lastErr error = errors.New("no urls tried")
+	lastErr := errors.New("no urls tried")
 	for _, u := range candidates {
 		sha, size, err := d.downloadOne(ctx, u, destPath)
 		if err == nil {
@@ -364,7 +364,7 @@ func (d *Downloader) downloadOne(ctx context.Context, dlURL, destPath string) (s
 // the base domains in order. Definitive 4xx (except 429) short-circuit; 5xx /
 // 429 / network errors fail over to the next domain.
 func (d *Downloader) proxyGetJSON(ctx context.Context, path string) ([]byte, error) {
-	var lastErr error = errors.New("no proxy bases configured")
+	lastErr := errors.New("no proxy bases configured")
 	for _, base := range d.bases() {
 		base = strings.TrimRight(base, "/")
 		if base == "" {

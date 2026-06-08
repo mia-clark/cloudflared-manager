@@ -6,10 +6,7 @@
 // directory layout.
 package cfdbin
 
-import (
-	"fmt"
-	"runtime"
-)
+import "runtime"
 
 // AssetName returns the cloudflared GitHub release asset name for the
 // given target (goos, goarch). Returns an empty string for unsupported
@@ -83,6 +80,3 @@ func BinaryFilename(goos string) string {
 func IsArchive(assetName string) bool {
 	return len(assetName) >= 4 && assetName[len(assetName)-4:] == ".tgz"
 }
-
-// formatErr is a tiny helper to keep error messages consistent.
-func formatErr(format string, args ...any) error { return fmt.Errorf(format, args...) }

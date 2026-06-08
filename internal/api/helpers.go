@@ -16,11 +16,6 @@ func pathID(r *http.Request) string {
 	return chi.URLParam(r, "id")
 }
 
-// pathName returns the chi URL param "name" or empty string.
-func pathName(r *http.Request) string {
-	return chi.URLParam(r, "name")
-}
-
 // pathVersion returns the chi URL param "version" or empty string.
 func pathVersion(r *http.Request) string {
 	return chi.URLParam(r, "version")

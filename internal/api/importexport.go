@@ -300,7 +300,7 @@ func safeHTTPClient(timeout time.Duration) *http.Client {
 			if err != nil {
 				return nil, err
 			}
-			var lastErr error = fmt.Errorf("no dialable address for %s", host)
+			lastErr := fmt.Errorf("no dialable address for %s", host)
 			for _, ip := range ips {
 				if !isPublicIP(ip) {
 					return nil, fmt.Errorf("refusing to connect to non-public address %s", ip)

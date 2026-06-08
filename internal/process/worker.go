@@ -74,9 +74,8 @@ type SpawnParams struct {
 // Worker is the live handle to one supervised child process. Methods
 // are safe to call from multiple goroutines.
 type Worker struct {
-	cmd      *exec.Cmd
-	done     chan struct{}
-	waitOnce sync.Once
+	cmd  *exec.Cmd
+	done chan struct{}
 
 	mu        sync.Mutex
 	exitErr   error
