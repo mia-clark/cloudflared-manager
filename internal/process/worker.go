@@ -144,9 +144,11 @@ func Spawn(ctx context.Context, p SpawnParams) (*Worker, error) {
 	// The two io.Copy goroutines share one sink; wrap it in a lockedWriter so
 	// concurrent Writes are serialised regardless of whether the caller-
 	// provided sink is itself thread-safe.
-	var sink io.Writer = io.Discard
+	var sink io.Writer
 	if p.LogSink != nil {
 		sink = &lockedWriter{w: p.LogSink}
+	} else {
+		sink = io.Discard
 	}
 	var copyWG sync.WaitGroup
 	copyWG.Add(2)
