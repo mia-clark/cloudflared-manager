@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react';
 import { Input, Button, Form, Typography, App, theme as antdTheme, Grid, Tag } from 'antd';
 import {
   KeyOutlined,
-  SafetyCertificateOutlined,
   ArrowRightOutlined,
   ClusterOutlined,
   MonitorOutlined,
@@ -14,6 +13,7 @@ import {
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import client, { setAPIToken, getAPIToken } from '../api/client';
+import BrandMark from '../components/BrandMark';
 
 const { Title, Text, Link: ATypoLink } = Typography;
 
@@ -234,10 +234,10 @@ const Login: React.FC = () => {
                 boxShadow: '0 6px 18px rgba(139,92,246,0.45)',
               }}
             >
-              <SafetyCertificateOutlined style={{ fontSize: 22, color: '#fff' }} />
+              <BrandMark size={24} color="#fff" />
             </div>
             <Text strong style={{ color: '#fff', fontSize: 17, letterSpacing: 0.5 }}>
-              Cloudflared Manager
+              Cloudflared 隧道管理器
             </Text>
           </div>
 
@@ -376,9 +376,7 @@ const Login: React.FC = () => {
                   boxShadow: '0 8px 20px rgba(139,92,246,0.25)',
                 }}
               >
-                <SafetyCertificateOutlined
-                  style={{ fontSize: 28, color: '#a5b4fc' }}
-                />
+                <BrandMark size={30} color="#F6821F" />
               </div>
               <Title
                 level={3}

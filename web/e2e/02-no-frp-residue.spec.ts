@@ -1,14 +1,12 @@
 /**
  * 确认产品已彻底从 frps-manager 切到 cloudflared-manager，无 frp 残留：
- *   - 侧栏品牌是 "Cloudflared Manager"
+ *   - 侧栏品牌是 "Cloudflared 隧道管理器"
  *   - 菜单含 cloudflared 专属项："cloudflared 实例" / "二进制管理" / "告警"
  *   - 侧栏导航区不出现 frps / frpc / FRPS / NAT 探测 等旧文案
  *   - 已删除的 /runtime/* 与 /nathole/* 端点返回 404
  *   - 仍存在的端点（/alerts、/metrics/{id}/traffic）可达
  *
- * 注意：负向文案检查**只**针对登录后的应用外壳（侧栏导航 nav 区域），
- * 不扫整页 body —— 登录页 Hero 目前仍残留 "FRPS Manager" 字样（属 web/src
- * 范畴，不在本 e2e 任务的修改范围内）。
+ * 注意：负向文案检查**只**针对登录后的应用外壳（侧栏导航 nav 区域），不扫整页 body。
  */
 import { test, expect } from './fixtures/daemon';
 import { login, sidebar, brand } from './helpers/selectors';
@@ -20,7 +18,7 @@ test('应用外壳呈现 cloudflared 文案/菜单，无 frp 残留', async ({ p
   await login.submitBtn(page).click();
   await page.waitForLoadState('networkidle');
 
-  // 品牌：Cloudflared Manager
+  // 品牌：Cloudflared 隧道管理器
   await expect(brand.sidebarTitle(page)).toBeVisible({ timeout: 10000 });
 
   // cloudflared 专属菜单项

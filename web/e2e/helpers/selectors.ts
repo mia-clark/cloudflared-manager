@@ -4,7 +4,7 @@ import type { Page, Locator } from '@playwright/test';
  * 集中维护的 UI 选择器。所有 spec 只从这里取 Locator，不在 spec 内写裸 CSS/XPath。
  *
  * 真实 UI 事实（来自 web/src）：
- *   - 品牌：侧栏顶部 "Cloudflared Manager"（MainLayout.tsx）。
+ *   - 品牌：侧栏顶部 "Cloudflared 隧道管理器"（MainLayout.tsx）。
  *   - 实例菜单项：'cloudflared 实例'（路由 /configs）；二进制 '二进制管理'。
  *   - Configs 页 **没有** data-testid，实例以 List+Card 渲染，卡片内含
  *     "ID: {id}" 文本与显示名；右上角有 "新建" 按钮。
@@ -21,7 +21,7 @@ export const login = {
 
 export const brand = {
   // 侧栏品牌文案
-  sidebarTitle: (p: Page): Locator => p.getByText('Cloudflared Manager', { exact: true }),
+  sidebarTitle: (p: Page): Locator => p.getByText('Cloudflared 隧道管理器', { exact: true }),
 };
 
 export const sidebar = {

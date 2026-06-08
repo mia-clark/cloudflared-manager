@@ -9,7 +9,6 @@ import {
   SettingOutlined,
   SwapOutlined,
   PoweroffOutlined,
-  SafetyCertificateOutlined,
   LineChartOutlined,
   BellOutlined,
   InfoCircleOutlined,
@@ -20,6 +19,7 @@ import type { MenuProps } from 'antd';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import client, { getAPIToken, clearAPIToken } from '../api/client';
 import { checkVersion } from '../api/update';
+import BrandMark from './BrandMark';
 import ThemeSwitcher from '../theme/ThemeSwitcher';
 import { useEventStream } from '../events/EventStreamContext';
 
@@ -179,9 +179,9 @@ const MainLayout: React.FC = () => {
             borderBottom: '1px solid rgba(255,255,255,0.06)',
           }}
         >
-          <SafetyCertificateOutlined style={{ fontSize: 22, color: token.colorPrimary }} />
-          <Text strong style={{ color: '#fff', fontSize: 15, letterSpacing: 0.5 }}>
-            Cloudflared Manager
+          <BrandMark size={24} color="#F6821F" />
+          <Text strong style={{ color: '#fff', fontSize: 14.5, letterSpacing: 0.3 }}>
+            Cloudflared 隧道管理器
           </Text>
         </div>
         <Menu

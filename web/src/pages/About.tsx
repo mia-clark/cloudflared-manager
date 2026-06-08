@@ -14,13 +14,13 @@ import {
 import {
   InfoCircleOutlined,
   GithubOutlined,
-  SafetyCertificateOutlined,
   BookOutlined,
   DownloadOutlined,
   ReadOutlined,
 } from '@ant-design/icons';
 import client from '../api/client';
 import UpdateCard from '../components/UpdateCard';
+import BrandMark from '../components/BrandMark';
 import { fmtDateTime } from '../utils/time';
 
 const { Title, Text, Paragraph } = Typography;
@@ -79,14 +79,14 @@ const About: React.FC = () => {
                   backdropFilter: 'blur(10px)',
                 }}
               >
-                <SafetyCertificateOutlined style={{ fontSize: 30, color: '#fff' }} />
+                <BrandMark size={32} color="#fff" />
               </div>
               <div>
                 <Title level={2} style={{ color: '#fff', margin: 0, fontWeight: 700, letterSpacing: '-0.3px' }}>
-                  Cloudflared Manager
+                  Cloudflared 隧道管理器
                 </Title>
                 <Text style={{ color: 'rgba(255,255,255,0.85)', fontSize: 13.5 }}>
-                  无头多实例 cloudflared 隧道管理面板
+                  Cloudflare Tunnel · 多实例 token 模式管理面板
                 </Text>
               </div>
             </Space>
@@ -144,8 +144,8 @@ const About: React.FC = () => {
         <Descriptions column={{ xs: 1, sm: 2, lg: 3 }} size="small" bordered labelStyle={{ width: 110, background: token.colorFillTertiary }}>
           <Descriptions.Item label="应用名称">
             <Space>
-              <SafetyCertificateOutlined style={{ color: token.colorPrimary }} />
-              Cloudflared Manager
+              <BrandMark size={16} color="#F6821F" />
+              Cloudflared 隧道管理器
             </Space>
           </Descriptions.Item>
           <Descriptions.Item label="Daemon 版本">
