@@ -195,7 +195,7 @@ func TestIsSafeRoot_RejectsEmptyAndWhitespace(t *testing.T) {
 }
 
 func TestIsSafeRoot_RejectsFilesystemRoots(t *testing.T) {
-	cases := []string{}
+	var cases []string
 	if runtime.GOOS == "windows" {
 		cases = []string{`C:\`, `D:\`, `c:/`, `C:`}
 	} else {
@@ -209,7 +209,7 @@ func TestIsSafeRoot_RejectsFilesystemRoots(t *testing.T) {
 }
 
 func TestIsSafeRoot_RejectsSingleComponentBelowRoot(t *testing.T) {
-	cases := []string{}
+	var cases []string
 	if runtime.GOOS == "windows" {
 		cases = []string{`C:\Windows`, `D:\foo`}
 	} else {
@@ -223,7 +223,7 @@ func TestIsSafeRoot_RejectsSingleComponentBelowRoot(t *testing.T) {
 }
 
 func TestIsSafeRoot_AcceptsRealisticStoreRoots(t *testing.T) {
-	cases := []string{}
+	var cases []string
 	if runtime.GOOS == "windows" {
 		cases = []string{
 			`C:\ProgramData\cfdmgrd\bin\cloudflared`,
