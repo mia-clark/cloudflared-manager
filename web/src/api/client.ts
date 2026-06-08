@@ -6,6 +6,7 @@ import type {
   BinaryList,
   AvailableList,
   BinaryItem,
+  TrafficSeries,
 } from './types';
 
 // localStorage key
@@ -94,4 +95,15 @@ export const validateApi = {
     client.post<ValidateResp>('/api/v1/validate', content, {
       headers: { 'Content-Type': 'text/plain' },
     }),
+};
+
+// ── Metrics / Traffic API ─────────────────────────────────────────────────────
+// 历史流量曲线。注意 to 必填（unix 秒），缺省后端 400。字段语义（非字节）：
+//   server scope     → in=请求数增量, out=错误数增量, conns=HA 连接数
+//   edge_conn scope  → in=smoothed_rtt, out=lost_packets（key=conn_index 0..3）
+export const metricsApi = {
+  traffic: (
+    id: string,
+    params: { scope?: string; key?: string; from?: number; to: number; step?: number }
+  ) => client.get<TrafficSeries>(`/api/v1/metrics/${encodeURIComponent(id)}/traffic`, { params }),
 };
