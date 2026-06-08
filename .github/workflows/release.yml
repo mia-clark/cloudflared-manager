@@ -145,8 +145,27 @@ jobs:
           fi
 
           git tag -a "${TAG}" -m "Release ${TAG}"
-          git push origin HEAD:main
-          git push origin "${TAG}"
+
+          # push HEAD:main 与 tag，带 rebase 重试：
+          # 触发本 run 之后到现在，main 上可能已经有别人/自己的新 commit
+          # （concurrency group 保证 release workflow 串行，但不挡其他 push）。
+          # 用 pull --rebase 把 release commit 重新放到最新 main 顶端再 push，
+          # 重试三次覆盖偶发竞态；超过 3 次说明 main 写入压力过大，应人工介入。
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main && git push origin "${TAG}"; then
+              echo "push ok on attempt ${attempt}"
+              exit 0
+            fi
+            echo "push rejected, rebasing onto latest origin/main (attempt ${attempt}/3)"
+            git fetch origin main
+            # rebase 时 version.go 上游冲突就让 release 这边的改动赢——人工
+            # 不会去改 version.go，唯一冲突源是另一个 bump，但 concurrency
+            # group 已经拦住了；若仍冲突，保留 release 端的 Number=新版本。
+            git rebase -X ours origin/main || { git rebase --abort; exit 1; }
+            sleep $((attempt * 2))
+          done
+          echo "push still rejected after 3 attempts" >&2
+          exit 1
 
   # ---------------------------------------------------------------------------
   # Job 2 — goreleaser 跨平台二进制 + GitHub Release
