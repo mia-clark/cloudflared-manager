@@ -13,6 +13,7 @@ const Traffic = lazy(() => import('./pages/Traffic'));
 const Alerts = lazy(() => import('./pages/Alerts'));
 const SystemPage = lazy(() => import('./pages/System'));
 const ToolsValidate = lazy(() => import('./pages/ToolsValidate'));
+const ConfigReference = lazy(() => import('./pages/ConfigReference'));
 const Settings = lazy(() => import('./pages/Settings'));
 const About = lazy(() => import('./pages/About'));
 
@@ -48,6 +49,7 @@ function App() {
             <Route path="tools">
               <Route index element={<Navigate to="/tools/validate" replace />} />
               <Route path="validate" element={<ToolsValidate />} />
+              <Route path="reference" element={<ConfigReference />} />
             </Route>
             <Route path="import-export" element={<ImportExport />} />
             <Route path="settings" element={<Settings />} />

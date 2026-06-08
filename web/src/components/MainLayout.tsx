@@ -14,6 +14,7 @@ import {
   BellOutlined,
   InfoCircleOutlined,
   CloudDownloadOutlined,
+  ReadOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
@@ -119,6 +120,7 @@ const MainLayout: React.FC = () => {
         type: 'group',
         label: '工具',
         children: [
+          { key: '/tools/reference', icon: <ReadOutlined />, label: '配置参考' },
           { key: '/tools/validate', icon: <ToolOutlined />, label: '配置校验' },
           { key: '/import-export', icon: <SwapOutlined />, label: '导入 / 导出' },
         ],
@@ -142,7 +144,7 @@ const MainLayout: React.FC = () => {
   // 根据 path 选中：取首段或两段做匹配
   const selectedKey = useMemo(() => {
     const p = location.pathname;
-    const candidates = ['/tools/validate', '/import-export', '/binaries'];
+    const candidates = ['/tools/reference', '/tools/validate', '/import-export', '/binaries'];
     for (const c of candidates) if (p.startsWith(c)) return c;
     const seg = '/' + p.split('/').filter(Boolean)[0];
     return seg || '/dashboard';
