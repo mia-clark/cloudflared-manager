@@ -66,6 +66,28 @@ $DlProxies = @(
     'https://docker.966788.xyz/'
 )
 
+# 自建 GitHub-Release 代理 (gh-raw) 优先通道
+#   版本查询: GET {base}/{key}/latest      -> JSON, 取 .tag
+#   资产下载: GET {base}/{key}/{tag}/{file} -> 二进制流
+#   7 个等价域名 (2 个 .xyz 主域名在前, 5 个 .qzz.io 备用在后), 任一不可用自动切下一个
+#   manager 二进制的配置键 (key) = cfd-mgr; 该通道为首选, 失败后回落 DlProxies + 直连
+#   可经环境变量覆盖: CFDM_RELEASE_PROXY_BASES (逗号分隔域名) / CFDM_INSTALL_PROXY_KEY (键)
+if ($env:CFDM_RELEASE_PROXY_BASES) {
+    $GhRawBases = $env:CFDM_RELEASE_PROXY_BASES -split ',' |
+        ForEach-Object { $_.Trim() } | Where-Object { $_ }
+} else {
+    $GhRawBases = @(
+        'https://gh-raw.966788.xyz',
+        'https://gh-raw.988669.xyz',
+        'https://gh-raw.s03.qzz.io',
+        'https://gh-raw.s04.qzz.io',
+        'https://gh-raw.s05.qzz.io',
+        'https://gh-raw.s06.qzz.io',
+        'https://gh-raw.s07.qzz.io'
+    )
+}
+$GhRawKey = if ($env:CFDM_INSTALL_PROXY_KEY) { $env:CFDM_INSTALL_PROXY_KEY } else { 'cfd-mgr' }
+
 # 运行期填充
 $script:Arch        = ''
 $script:BinPath     = Join-Path $InstallDir $BinName
@@ -297,13 +319,34 @@ function Resolve-Version {
         return
     }
     Write-Info '正在查询最新版本...'
-    try {
-        $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" `
-            -Headers @{ 'User-Agent' = 'cfdmgrd-installer' } -UseBasicParsing
-        $script:Version = $rel.tag_name
-    } catch {
-        Die '无法获取最新版本, 请用 -Version 手动指定 (如 -Version v1.2.14)'
+
+    # 首选: 自建 gh-raw 代理 (除非 -NoProxy)。逐个域名尝试, 取 JSON 里的 .tag 字段
+    if (-not $NoProxy) {
+        foreach ($base in $GhRawBases) {
+            $b = $base.TrimEnd('/')
+            try {
+                $rel = Invoke-RestMethod -Uri "$b/$GhRawKey/latest" `
+                    -Headers @{ 'User-Agent' = 'cfdmgrd-installer' } -UseBasicParsing -TimeoutSec 15
+                if ($rel.tag) {
+                    $script:Version = $rel.tag
+                    Write-Ok "版本来源 (代理): $b"
+                    break
+                }
+            } catch { }
+        }
     }
+
+    # 回落: GitHub API releases/latest (取 .tag_name 字段)
+    if (-not $script:Version) {
+        try {
+            $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" `
+                -Headers @{ 'User-Agent' = 'cfdmgrd-installer' } -UseBasicParsing
+            $script:Version = $rel.tag_name
+        } catch {
+            Die '无法获取最新版本, 请用 -Version 手动指定 (如 -Version v1.2.14)'
+        }
+    }
+
     if (-not $script:Version) { Die '无法解析最新版本号, 请用 -Version 手动指定' }
     Write-Ok "最新版本: $($script:Version)"
 }
@@ -377,9 +420,31 @@ function Install-Binary {
     New-Item -ItemType Directory -Force -Path $script:TmpDir | Out-Null
 
     $zipPath = Join-Path $script:TmpDir $asset
-    Write-Info "目标: $url"
-    if (-not (Invoke-Download -GhUrl $url -Dest $zipPath)) {
-        Die '全部下载途径失败 (代理 + 直连), 请检查网络或版本号'
+    Write-Info "目标: $asset ($($script:Version))"
+
+    # 首选: 自建 gh-raw 代理 (除非 -NoProxy)。逐个域名尝试 {base}/{key}/{tag}/{file}
+    $got = $false
+    if (-not $NoProxy) {
+        foreach ($base in $GhRawBases) {
+            $b = $base.TrimEnd('/')
+            Write-Info "尝试代理: $b"
+            try { Get-RemoteFile -Url "$b/$GhRawKey/$($script:Version)/$asset" -Dest $zipPath } catch { Remove-Item -Force $zipPath -ErrorAction SilentlyContinue; continue }
+            if (Test-Zip $zipPath) {
+                Write-Ok "下载源 (代理): $b"
+                $got = $true
+                break
+            }
+            Write-Warn '  -> 返回非法包 (伪 200?), 跳下一家'
+            Remove-Item -Force $zipPath -ErrorAction SilentlyContinue
+        }
+        if (-not $got) { Write-Warn '全部 gh-raw 代理失败, 回落 GitHub 直连/镜像' }
+    }
+
+    # 回落: 沿用既有 Invoke-Download (-Proxy / DlProxies / GitHub 直连)
+    if (-not $got) {
+        if (-not (Invoke-Download -GhUrl $url -Dest $zipPath)) {
+            Die '全部下载途径失败 (gh-raw 代理 + 镜像 + 直连), 请检查网络或版本号'
+        }
     }
 
     Write-Info '解压安装包...'

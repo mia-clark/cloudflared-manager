@@ -26,17 +26,26 @@ const (
 	defaultRepo       = "mia-clark/cloudflared-manager"
 	defaultInstallSh  = "https://raw.githubusercontent.com/mia-clark/cloudflared-manager/main/scripts/install.sh"
 	defaultInstallPs1 = "https://raw.githubusercontent.com/mia-clark/cloudflared-manager/main/scripts/install.ps1"
-	cacheTTL          = time.Hour
-	httpTimeout       = 12 * time.Second
+	// defaultSelfUpdateKey is the self-hosted Release-proxy key for the
+	// MANAGER's own releases (the "check for update" path). The install
+	// scripts use a separate key (cfd-mgr) for the binary download.
+	defaultSelfUpdateKey = "cfd-mgr-releases"
+	cacheTTL             = time.Hour
+	httpTimeout          = 12 * time.Second
 )
 
-// apiMirrors are prepended to the GitHub API URL when a direct request fails
-// (helpful from networks where api.github.com is blocked). They mirror the
-// CFDM_DOWNLOAD_MIRRORS default used by the binary downloader so the two
-// GitHub-proxy paths stay consistent.
-var apiMirrors = []string{
-	"https://gh-proxy.org/",
-	"https://gh-proxy.com/",
+// defaultProxyBases are the self-hosted GitHub-Release proxy domains
+// (docs/三方对接_RELEASE_API.md). All equivalent; tried in order with
+// failover. Self-update fetches {base}/{key}/latest to learn the newest
+// manager version — it never talks to api.github.com directly.
+var defaultProxyBases = []string{
+	"https://gh-raw.966788.xyz",
+	"https://gh-raw.988669.xyz",
+	"https://gh-raw.s03.qzz.io",
+	"https://gh-raw.s04.qzz.io",
+	"https://gh-raw.s05.qzz.io",
+	"https://gh-raw.s06.qzz.io",
+	"https://gh-raw.s07.qzz.io",
 }
 
 // Release is the subset of a GitHub release surfaced to the UI.
@@ -58,6 +67,12 @@ type Config struct {
 	InstallPs1URL string
 	// DataDir is where update.log is written.
 	DataDir string
+	// ProxyBases is the ordered list of Release-proxy domains used for the
+	// update check; empty => env CFDM_RELEASE_PROXY_BASES or defaultProxyBases.
+	ProxyBases []string
+	// ProxyKey is the proxy config key for the manager's releases;
+	// empty => env CFDM_SELFUPDATE_PROXY_KEY or defaultSelfUpdateKey.
+	ProxyKey string
 }
 
 // Updater queries the latest release and orchestrates self-update.
@@ -80,6 +95,15 @@ func New(cfg Config) *Updater {
 	}
 	if cfg.InstallPs1URL == "" {
 		cfg.InstallPs1URL = env("CFDM_INSTALL_PS1_URL", defaultInstallPs1)
+	}
+	if len(cfg.ProxyBases) == 0 {
+		cfg.ProxyBases = splitCSV(env("CFDM_RELEASE_PROXY_BASES", ""))
+		if len(cfg.ProxyBases) == 0 {
+			cfg.ProxyBases = defaultProxyBases
+		}
+	}
+	if cfg.ProxyKey == "" {
+		cfg.ProxyKey = env("CFDM_SELFUPDATE_PROXY_KEY", defaultSelfUpdateKey)
 	}
 	return &Updater{
 		cfg:  cfg,
@@ -116,15 +140,20 @@ func (u *Updater) CheckLatest(ctx context.Context, force bool) (*Release, error)
 }
 
 func (u *Updater) fetchLatest(ctx context.Context) (*Release, error) {
-	base := "https://api.github.com/repos/" + u.cfg.Repo + "/releases/latest"
-	urls := append([]string{base}, prefixMirrors(base)...)
 	var lastErr error
-	for _, raw := range urls {
-		rel, err := u.fetchOne(ctx, raw)
+	for _, base := range u.cfg.ProxyBases {
+		base = strings.TrimRight(strings.TrimSpace(base), "/")
+		if base == "" {
+			continue
+		}
+		rel, err := u.fetchOne(ctx, base+"/"+u.cfg.ProxyKey+"/latest")
 		if err == nil {
 			return rel, nil
 		}
 		lastErr = err
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no release-proxy bases configured")
 	}
 	return nil, fmt.Errorf("query latest release failed: %w", lastErr)
 }
@@ -134,7 +163,7 @@ func (u *Updater) fetchOne(ctx context.Context, url string) (*Release, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "cfdmgrd-selfupdate")
 
 	resp, err := u.http.Do(req)
@@ -143,25 +172,28 @@ func (u *Updater) fetchOne(ctx context.Context, url string) (*Release, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status %d from %s", resp.StatusCode, url)
+		// proxy errors are text/plain; surface a trimmed snippet for diagnostics.
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<12))
+		return nil, fmt.Errorf("unexpected status %d from %s: %s", resp.StatusCode, url, strings.TrimSpace(string(body)))
 	}
 
+	// Release-proxy single-version shape (docs/三方对接_RELEASE_API.md §3.2):
+	// uses "tag" (not "tag_name") and carries no html_url.
 	var payload struct {
-		TagName     string `json:"tag_name"`
+		Tag         string `json:"tag"`
 		Body        string `json:"body"`
-		HTMLURL     string `json:"html_url"`
 		PublishedAt string `json:"published_at"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&payload); err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(payload.TagName) == "" {
-		return nil, fmt.Errorf("empty tag_name in release response")
+	if strings.TrimSpace(payload.Tag) == "" {
+		return nil, fmt.Errorf("empty tag in release response")
 	}
 	return &Release{
-		Tag:         payload.TagName,
+		Tag:         payload.Tag,
 		Changelog:   payload.Body,
-		HTMLURL:     payload.HTMLURL,
+		HTMLURL:     "https://github.com/" + u.cfg.Repo + "/releases/tag/" + payload.Tag,
 		PublishedAt: payload.PublishedAt,
 	}, nil
 }
@@ -221,10 +253,13 @@ func parseVer(s string) [3]int {
 	return out
 }
 
-func prefixMirrors(u string) []string {
-	out := make([]string, 0, len(apiMirrors))
-	for _, m := range apiMirrors {
-		out = append(out, m+u)
+// splitCSV splits a comma-separated string into trimmed, non-empty parts.
+func splitCSV(s string) []string {
+	out := make([]string, 0)
+	for _, p := range strings.Split(s, ",") {
+		if t := strings.TrimSpace(p); t != "" {
+			out = append(out, t)
+		}
 	}
 	return out
 }

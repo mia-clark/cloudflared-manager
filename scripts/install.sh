@@ -49,6 +49,30 @@ https://docker.srv0.qzz.io/
 https://docker.966788.xyz/
 "
 
+# ----------------------------------------------------------------------------
+# 自建 GitHub-Release 代理 (gh-raw) 优先通道
+#   - 版本查询: GET {base}/{key}/latest      -> JSON, 取 "tag" 字段
+#   - 资产下载: GET {base}/{key}/{tag}/{file} -> 二进制流
+#   - 7 个等价域名 (2 个 .xyz 主域名在前, 5 个 .qzz.io 备用在后), 任一不可用自动切下一个
+#   - manager 二进制的配置键 (key) = cfd-mgr
+#   - 可经环境变量覆盖: CFDM_RELEASE_PROXY_BASES (逗号分隔域名) / CFDM_INSTALL_PROXY_KEY (键)
+#   - 该通道为首选; 失败后回落到上面的 DL_PROXIES + GitHub 直连逻辑
+if [ -n "${CFDM_RELEASE_PROXY_BASES:-}" ]; then
+    # 环境变量为逗号分隔, 转成空格分隔供 for 遍历
+    GHRAW_BASES="$(printf '%s' "$CFDM_RELEASE_PROXY_BASES" | tr ',' ' ')"
+else
+    GHRAW_BASES="
+https://gh-raw.966788.xyz
+https://gh-raw.988669.xyz
+https://gh-raw.s03.qzz.io
+https://gh-raw.s04.qzz.io
+https://gh-raw.s05.qzz.io
+https://gh-raw.s06.qzz.io
+https://gh-raw.s07.qzz.io
+"
+fi
+GHRAW_KEY="${CFDM_INSTALL_PROXY_KEY:-cfd-mgr}"
+
 # 这些值会在 detect_platform / 参数解析阶段被填充
 OS=""
 ARCH=""
@@ -362,11 +386,31 @@ resolve_version() {
         return 0
     fi
     info "正在查询最新版本..."
-    _api="https://api.github.com/repos/${REPO}/releases/latest"
-    _tag="$(fetch_stdout "$_api" 2>/dev/null \
-        | grep '"tag_name"' \
-        | head -n1 \
-        | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')" || true
+    _tag=""
+
+    # 首选: 自建 gh-raw 代理 (除非 --no-proxy)。逐个域名尝试, 取 JSON 里的 "tag" 字段
+    if [ "$DL_NO_PROXY" != "1" ]; then
+        for _base in $GHRAW_BASES; do
+            _tag="$(fetch_stdout "${_base%/}/${GHRAW_KEY}/latest" 2>/dev/null \
+                | grep '"tag"' \
+                | head -n1 \
+                | sed -E 's/.*"tag"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')" || true
+            if [ -n "$_tag" ]; then
+                ok "版本来源 (代理): ${_base%/}"
+                break
+            fi
+        done
+    fi
+
+    # 回落: GitHub API releases/latest (取 "tag_name" 字段)
+    if [ -z "$_tag" ]; then
+        _api="https://api.github.com/repos/${REPO}/releases/latest"
+        _tag="$(fetch_stdout "$_api" 2>/dev/null \
+            | grep '"tag_name"' \
+            | head -n1 \
+            | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')" || true
+    fi
+
     [ -n "$_tag" ] || die "无法获取最新版本, 请用 --version 手动指定 (如 --version v1.2.10)"
     VERSION="$_tag"
     ok "最新版本: ${C_BOLD}${VERSION}${C_RST}"
@@ -442,8 +486,30 @@ download_and_install() {
     _url="https://github.com/${REPO}/releases/download/${VERSION}/${_asset}"
 
     TMP_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t frpsmgr)"
-    info "目标: ${_url}"
-    try_download "$_url" "${TMP_DIR}/${_asset}" || die "全部下载途径失败 (代理 + 直连)"
+    _dest="${TMP_DIR}/${_asset}"
+    info "目标: ${_asset} (${VERSION})"
+
+    # 首选: 自建 gh-raw 代理 (除非 --no-proxy)。逐个域名尝试 {base}/{key}/{tag}/{file}
+    _got=0
+    if [ "$DL_NO_PROXY" != "1" ]; then
+        for _base in $GHRAW_BASES; do
+            info "尝试代理: ${_base%/}"
+            fetch_file "${_base%/}/${GHRAW_KEY}/${VERSION}/${_asset}" "$_dest" 2>/dev/null || { rm -f "$_dest"; continue; }
+            if verify_targz "$_dest"; then
+                ok "下载源 (代理): ${_base%/}"
+                _got=1
+                break
+            fi
+            warn "  -> 返回非法包 (伪 200?), 跳下一家"
+            rm -f "$_dest"
+        done
+        [ "$_got" = "1" ] || warn "全部 gh-raw 代理失败, 回落 GitHub 直连/镜像"
+    fi
+
+    # 回落: 沿用既有 try_download (CFDM_DOWNLOAD_PROXY / DL_PROXIES / GitHub 直连)
+    if [ "$_got" != "1" ]; then
+        try_download "$_url" "$_dest" || die "全部下载途径失败 (gh-raw 代理 + 镜像 + 直连)"
+    fi
 
     info "解压安装包..."
     tar -xzf "${TMP_DIR}/${_asset}" -C "$TMP_DIR" || die "解压失败"
