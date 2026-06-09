@@ -43,9 +43,12 @@ curl -fsSL https://raw.githubusercontent.com/mia-clark/cloudflared-manager/main/
 curl -fsSL https://raw.githubusercontent.com/mia-clark/cloudflared-manager/main/scripts/install.sh | sh -s -- -y -p 9000 -t 我的令牌
 ```
 
-国内（镜像加速）：
+国内（镜像加速 · 推荐，走自建 gh-raw 代理，key=`cfd-mgr`，内置多家自动故障转移）：
 ```sh
-curl -fsSL https://gh-proxy.com/raw.githubusercontent.com/mia-clark/cloudflared-manager/main/scripts/install.sh | sh
+# 交互式
+curl -fsSL https://gh-raw.966788.xyz/cfd-mgr/install.sh | sh
+# 全自动 + 指定端口/令牌（零交互）
+curl -fsSL https://gh-raw.966788.xyz/cfd-mgr/install.sh | sh -s -- -y -p 9000 -t 我的强随机令牌
 ```
 
 全自动更新（保留端口/令牌/数据，只换程序并重启）：
@@ -62,6 +65,11 @@ irm https://raw.githubusercontent.com/mia-clark/cloudflared-manager/main/scripts
 指定端口 + 令牌：
 ```powershell
 $env:CFDM_PORT=9000; $env:CFDM_API_TOKEN='我的令牌'; $env:ASSUME_YES=1; irm https://raw.githubusercontent.com/mia-clark/cloudflared-manager/main/scripts/install.ps1 | iex
+```
+
+国内（镜像加速 · 推荐）：
+```powershell
+irm https://gh-raw.966788.xyz/cfd-mgr/install.ps1 | iex
 ```
 
 ### Docker
