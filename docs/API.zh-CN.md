@@ -178,6 +178,38 @@ cloudflared 没有 per-tunnel 字节计数器，只暴露 Prometheus 指标。`G
 | `409` | `conflict` | 已是最新版本且未带 `?force=1` |
 | `502` | `upstream_failure` | 无法获取最新版本（GitHub 拉取失败） |
 
+### 1.5 `GET /api/v1/system/update/log` — 读取自更新日志
+
+返回 `update.log` 尾部（最多约 64 KiB），供 Web 端在更新过程中实时展示下载 / 替换 / 重启步骤。每次发起 `POST /system/update` 会先截断日志并写头 `[*] 准备自更新: <from> -> <to>`，spawn 出去的安装脚本再往同一文件追加步骤。重启窗口期接口可能短暂不可达，调用方应容忍失败并继续轮询。
+
+```json
+{ "content": "[*] 准备自更新: 2.0.0 -> 2.0.1\n[*] 下载中…\n[+] 完成\n" }
+```
+
+行首前缀约定（前端按此着色，终端观感）：`[*]` 步骤 / `[+]` 成功 / `[!]` 警告 / `[x]` 错误。
+
+### 1.6 `GET/PUT /api/v1/ui/branding` — UI 品牌（站点标题，snake_case）
+
+运营商可自定义侧边栏 / 登录页品牌名与浏览器标签 `<title>`，持久化在数据目录 `meta.json`，**跨设备 / 清缓存 / 重新登录后依然生效**；首屏由守护进程注入 `<title>` 与 `window.__CFD_BRANDING__` 实现**零闪烁**。
+
+- `GET` **公开（无需 token）** —— 登录页与首屏 `<title>` 在鉴权前即需渲染。返回生效值（空字段已用默认填充）。
+- `PUT` 需鉴权。省略的字段保留当前存储值；显式空串重置为默认。返回生效值。
+
+| 字段 | 类型 | 约束 | 默认 |
+|---|---|---|---|
+| `app_name` | string | ≤ 40 字 | `Cloudflared 隧道管理器` |
+| `app_subtitle` | string | ≤ 60 字 | `Cloudflare Tunnel 管理面板` |
+| `html_title` | string | ≤ 120 字 | `Cloudflared 隧道管理器 · Cloudflare Tunnel 管理面板` |
+
+> token 永不在此回传；本端点只管品牌文本。⚠️ 三字段全为 **snake_case**（与 Snapshot / 系统监控一致），不要写成 camelCase。
+
+```json
+// PUT 请求体（仅改标题，其余保留）
+{ "html_title": "我的隧道控制台" }
+// 响应（生效值）
+{ "app_name": "Cloudflared 隧道管理器", "app_subtitle": "Cloudflare Tunnel 管理面板", "html_title": "我的隧道控制台" }
+```
+
 ---
 
 ## 2. 隧道配置 CRUD（`config` 子树 = camelCase）
@@ -660,6 +692,9 @@ version 未安装返回 `404 not_found`；version 非法 `400`。
 | 2 | GET | `/api/v1/version` | 是 |
 | 3 | GET | `/api/v1/version/check` | 是 |
 | 4 | POST | `/api/v1/system/update` | 是 |
+| — | GET | `/api/v1/system/update/log` | 是 |
+| — | GET | `/api/v1/ui/branding` | 否 |
+| — | PUT | `/api/v1/ui/branding` | 是 |
 | 5 | GET | `/api/v1/configs` | 是 |
 | 6 | POST | `/api/v1/configs` | 是 |
 | 7 | POST | `/api/v1/configs/reorder` | 是 |

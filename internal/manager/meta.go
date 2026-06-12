@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -21,6 +22,43 @@ type Meta struct {
 	LogViewSince map[string]int64  `json:"log_view_since,omitempty"`
 	Names        map[string]string `json:"names,omitempty"`
 	Manual       map[string]bool   `json:"manual,omitempty"`
+	// Branding holds the operator-customizable UI brand name and browser
+	// title. nil / empty fields resolve to the Default* constants on read.
+	Branding *Branding `json:"branding,omitempty"`
+}
+
+// Branding is the persisted, operator-editable UI branding. Stored inside
+// meta.json so it survives browser cache clears and re-logins. Empty fields
+// resolve to the Default* constants via Effective().
+type Branding struct {
+	AppName     string `json:"app_name,omitempty"`
+	AppSubtitle string `json:"app_subtitle,omitempty"`
+	HTMLTitle   string `json:"html_title,omitempty"`
+}
+
+// Default branding values — the single source of truth, matching the strings
+// the frontend previously hard-coded (sidebar / login / <title>). Used as the
+// fallback whenever a field is unset/empty.
+const (
+	DefaultAppName     = "Cloudflared 隧道管理器"
+	DefaultAppSubtitle = "Cloudflare Tunnel 管理面板"
+	DefaultHTMLTitle   = "Cloudflared 隧道管理器 · Cloudflare Tunnel 管理面板"
+)
+
+// Effective returns a copy with every empty field filled from the defaults,
+// i.e. a branding that is always safe to render directly.
+func (b Branding) Effective() Branding {
+	out := b
+	if strings.TrimSpace(out.AppName) == "" {
+		out.AppName = DefaultAppName
+	}
+	if strings.TrimSpace(out.AppSubtitle) == "" {
+		out.AppSubtitle = DefaultAppSubtitle
+	}
+	if strings.TrimSpace(out.HTMLTitle) == "" {
+		out.HTMLTitle = DefaultHTMLTitle
+	}
+	return out
 }
 
 func defaultMeta() *Meta {
@@ -96,7 +134,31 @@ func (s *metaStore) snapshot() Meta {
 	for k, v := range s.data.Manual {
 		m.Manual[k] = v
 	}
+	if s.data.Branding != nil {
+		b := *s.data.Branding
+		m.Branding = &b
+	}
 	return m
+}
+
+// branding returns the raw stored branding (no defaults applied). A zero
+// value means nothing has been customized yet.
+func (s *metaStore) branding() Branding {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.data.Branding == nil {
+		return Branding{}
+	}
+	return *s.data.Branding
+}
+
+// setBranding persists the branding wholesale (atomic write).
+func (s *metaStore) setBranding(b Branding) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	bc := b
+	s.data.Branding = &bc
+	return s.flushLocked()
 }
 
 func (s *metaStore) setSort(order []string) error {

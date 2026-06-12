@@ -48,7 +48,13 @@ export async function startUpdate(force = false): Promise<UpdateStartResp> {
   return resp.data;
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** 读取当前自更新日志 (update.log)，供更新中实时展示步骤。重启窗口期会失败，调用方需容忍。 */
+export async function fetchUpdateLog(): Promise<string> {
+  const resp = await client.get<{ content?: string }>('/api/v1/system/update/log', { timeout: 4000 });
+  return resp.data?.content || '';
+}
 
 /**
  * 轮询 /api/v1/version，直到 daemon 版本不再等于 fromVersion（即新进程已起来），

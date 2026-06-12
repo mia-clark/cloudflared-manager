@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -215,6 +216,32 @@ func (u *Updater) logPath() string {
 		dir = tempDir()
 	}
 	return filepath.Join(dir, "update.log")
+}
+
+// ResetLog truncates update.log and writes a fresh header, so each update run
+// starts with a clean log that the web UI can stream as live progress (the
+// spawned updater appends its step output to the same file).
+func (u *Updater) ResetLog(from, to string) {
+	f, err := os.Create(u.logPath())
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "[*] 准备自更新: %s -> %s\n", from, to)
+}
+
+// ReadLog returns the tail of update.log (best-effort, capped) so the web UI
+// can show the current update's progress. Empty string when absent.
+func (u *Updater) ReadLog() string {
+	b, err := os.ReadFile(u.logPath())
+	if err != nil {
+		return ""
+	}
+	const maxLog = 64 << 10 // 64 KiB tail is more than enough
+	if len(b) > maxLog {
+		b = b[len(b)-maxLog:]
+	}
+	return string(b)
 }
 
 // HasUpdate reports whether latest is strictly newer than current.

@@ -14,6 +14,7 @@ import {
 import { useNavigate } from 'react-router-dom';
 import client, { setAPIToken, getAPIToken } from '../api/client';
 import BrandMark from '../components/BrandMark';
+import { useBranding } from '../branding/BrandingContext';
 
 const { Title, Text, Link: ATypoLink } = Typography;
 
@@ -22,6 +23,7 @@ const Login: React.FC = () => {
   const { message } = App.useApp();
   const { token } = antdTheme.useToken();
   const screens = Grid.useBreakpoint();
+  const { branding } = useBranding();
   const [loading, setLoading] = useState<boolean>(false);
 
   useEffect(() => {
@@ -237,7 +239,7 @@ const Login: React.FC = () => {
               <BrandMark size={24} color="#fff" />
             </div>
             <Text strong style={{ color: '#fff', fontSize: 17, letterSpacing: 0.5 }}>
-              Cloudflared 隧道管理器
+              {branding.app_name}
             </Text>
           </div>
 

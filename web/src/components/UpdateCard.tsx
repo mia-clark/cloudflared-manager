@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Card,
   Space,
@@ -23,7 +23,7 @@ import {
 } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { checkVersion, startUpdate, waitForRestart, type VersionCheckResp } from '../api/update';
+import { checkVersion, startUpdate, waitForRestart, fetchUpdateLog, sleep, type VersionCheckResp } from '../api/update';
 import { fmtDateTime } from '../utils/time';
 
 const { Text, Title, Paragraph } = Typography;
@@ -50,6 +50,14 @@ const UpdateCard: React.FC = () => {
   const [logOpen, setLogOpen] = useState(false);
   const [progressText, setProgressText] = useState('');
   const [newVersion, setNewVersion] = useState('');
+  const [updateLog, setUpdateLog] = useState('');
+  const logBoxRef = useRef<HTMLDivElement | null>(null);
+
+  // 日志更新后自动滚到底部
+  useEffect(() => {
+    const el = logBoxRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [updateLog]);
 
   const runCheck = useCallback(
     async (force: boolean) => {
@@ -82,15 +90,38 @@ const UpdateCard: React.FC = () => {
     if (!info) return;
     const fromV = info.current;
     setPhase('updating');
-    setProgressText('正在下载新版本并替换二进制…');
+    setUpdateLog('');
+    setProgressText('正在启动更新…');
+
+    // 后台轮询 update.log，把下载/解压/安装/重启等步骤实时显示出来；
+    // 重启窗口期接口短暂不可达, 读取失败则保留上次日志、继续轮询。
+    let polling = true;
+    const pollLog = async () => {
+      while (polling) {
+        try {
+          const log = await fetchUpdateLog();
+          if (polling && log) setUpdateLog(log);
+        } catch { /* 重启期连接失败属预期 */ }
+        await sleep(1200);
+      }
+    };
+
     try {
       const r = await startUpdate(false);
-      setProgressText(`更新已启动（${r.from} → ${r.to}），服务正在重启，请勿关闭页面…`);
+      setProgressText(`更新已启动（${r.from} → ${r.to}），正在下载并替换二进制，服务即将重启，请勿关闭页面…`);
+      void pollLog();
       const v = await waitForRestart(fromV);
+      polling = false;
+      // 抓最后一次日志（含重启后尾部）
+      try {
+        const finalLog = await fetchUpdateLog();
+        if (finalLog) setUpdateLog(finalLog);
+      } catch { /* ignore */ }
       setNewVersion(v);
       setPhase('done');
       message.success(`更新完成，当前版本 ${v}`);
     } catch (e) {
+      polling = false;
       const err = e as { response?: { data?: { error?: { message?: string } } }; message?: string };
       const detail = err.response?.data?.error?.message || err.message || '更新失败';
       setProgressText(detail);
@@ -98,6 +129,16 @@ const UpdateCard: React.FC = () => {
       message.error(detail);
     }
   }, [info, message]);
+
+  // 自更新日志按 [*]/[+]/[!]/[x] 前缀着色, 终端观感
+  const logLineColor = (line: string): string => {
+    const t = line.trimStart();
+    if (t.startsWith('[+]')) return '#4ec9b0';   // 成功 青绿
+    if (t.startsWith('[!]')) return '#dcdcaa';   // 警告 黄
+    if (t.startsWith('[x]')) return '#f48771';   // 错误 红
+    if (t.startsWith('[*]')) return '#9cdcfe';   // 步骤 蓝
+    return '#d4d4d4';
+  };
 
   const confirmUpdate = useCallback(() => {
     if (!info) return;
@@ -155,6 +196,39 @@ const UpdateCard: React.FC = () => {
           <Paragraph type="secondary" style={{ marginTop: 8, maxWidth: 520, marginInline: 'auto' }}>
             {progressText}
           </Paragraph>
+
+          {/* 实时更新日志（终端式）：把下载/解压/安装/重启等步骤逐行显示出来 */}
+          {updateLog && (
+            <div style={{ maxWidth: 660, margin: '14px auto 4px' }}>
+              <Text type="secondary" style={{ fontSize: 12, display: 'block', textAlign: 'left', marginBottom: 6 }}>
+                更新步骤日志{phase === 'updating' ? '（实时）' : ''}
+              </Text>
+              <div
+                ref={logBoxRef}
+                style={{
+                  textAlign: 'left',
+                  background: '#1e1e1e',
+                  color: '#d4d4d4',
+                  fontFamily: "'Cascadia Code', 'Cascadia Mono', Consolas, Menlo, monospace",
+                  fontSize: 12.5,
+                  lineHeight: 1.65,
+                  padding: '12px 14px',
+                  borderRadius: 8,
+                  maxHeight: 300,
+                  overflowY: 'auto',
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-all',
+                  border: '1px solid rgba(255,255,255,0.08)',
+                  boxShadow: 'inset 0 2px 8px rgba(0,0,0,0.4)',
+                }}
+              >
+                {updateLog.split('\n').map((line, i) => (
+                  <div key={i} style={{ color: logLineColor(line) }}>{line || ' '}</div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {phase === 'done' && (
             <Button type="primary" icon={<ReloadOutlined />} onClick={() => window.location.reload()}>
               刷新页面

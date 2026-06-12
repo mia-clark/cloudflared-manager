@@ -37,9 +37,13 @@ func NewRouter(d Deps) http.Handler {
 
 	sys := NewSystemHandler(d.Cfg.DataDir)
 	docs := NewDocsHandler(d.Cfg.DocsEnabled)
+	ui := NewUIHandler(d.Manager)
 
 	// Unauthenticated probes + docs.
 	r.Get("/api/v1/health", sys.Health)
+	// UI branding is read without auth so the login page + browser <title>
+	// can render the operator's brand before the user is authenticated.
+	r.Get("/api/v1/ui/branding", ui.GetBranding)
 	if docs.Enabled() {
 		r.Get("/api/docs", docs.Redirect)
 		r.Get("/api/docs/", docs.UI)
@@ -66,6 +70,9 @@ func NewRouter(d Deps) http.Handler {
 		r.Get("/api/v1/version", sys.Version)
 		r.Get("/api/v1/version/check", upd.Check)
 		r.Post("/api/v1/system/update", upd.Update)
+		r.Get("/api/v1/system/update/log", upd.Log)
+
+		r.Put("/api/v1/ui/branding", ui.UpdateBranding)
 
 		r.Get("/api/v1/configs", configs.List)
 		r.Post("/api/v1/configs", configs.Create)
@@ -164,9 +171,13 @@ func NewRouter(d Deps) http.Handler {
 			http.NotFound(w, r)
 			return
 		}
+		// 注入运营商品牌（替换 <title> + window.__CFD_BRANDING__）后写出，首屏零闪。
+		out := ui.InjectBranding(index)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		// SPA 壳必须随取随新，确保品牌改动立即生效；静态资源仍走强缓存。
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(index)
+		_, _ = w.Write(out)
 	})
 
 	return r

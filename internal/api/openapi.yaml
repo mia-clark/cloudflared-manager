@@ -134,6 +134,49 @@ paths:
         "409": { $ref: "#/components/responses/Conflict", description: "已是最新版本（可加 ?force=1）" }
         "502": { $ref: "#/components/responses/Error", description: 无法获取最新版本（上游失败） }
 
+  /api/v1/system/update/log:
+    get:
+      tags: [system]
+      summary: 读取当前自更新日志（update.log）
+      description: 返回 update.log 尾部内容，供 Web 端在更新过程中实时展示下载 / 替换 / 重启等步骤。重启窗口期接口可能短暂不可达，调用方应容忍。
+      responses:
+        "200":
+          description: 日志内容
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  content: { type: string, description: "update.log 尾部（最多约 64 KiB），无日志时为空串" }
+
+  /api/v1/ui/branding:
+    get:
+      tags: [system]
+      summary: 读取生效的 UI 品牌（公开，无需鉴权）
+      description: 返回侧边栏 / 登录页 / 浏览器标题使用的品牌；空字段已用默认值填充。登录页与首屏 <title> 在鉴权前即可渲染，故公开。
+      security: []
+      responses:
+        "200":
+          description: 生效品牌
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Branding" }
+    put:
+      tags: [system]
+      summary: 更新 UI 品牌（需鉴权）
+      description: 省略的字段保留当前存储值，显式空串重置为默认。品牌持久化在数据目录 meta.json，跨设备 / 清缓存后依然生效，首屏由服务端注入实现零闪。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Branding" }
+      responses:
+        "200":
+          description: 生效品牌
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Branding" }
+
   /api/v1/configs:
     get:
       tags: [configs]
@@ -1269,3 +1312,11 @@ components:
         html_url: { type: string }
         published_at: { type: string, format: date-time }
         check_error: { type: string }
+
+    Branding:
+      type: object
+      description: "UI 品牌（snake_case）。GET 返回生效值（空字段已填默认）；PUT 时省略字段保留原值、空串重置为默认。"
+      properties:
+        app_name: { type: string, maxLength: 40, description: "品牌名（侧边栏 / 登录页顶部），默认「Cloudflared 隧道管理器」" }
+        app_subtitle: { type: string, maxLength: 60, description: "副标题（登录页小字），默认「Cloudflare Tunnel 管理面板」" }
+        html_title: { type: string, maxLength: 120, description: "浏览器标签 <title>，默认「Cloudflared 隧道管理器 · Cloudflare Tunnel 管理面板」" }

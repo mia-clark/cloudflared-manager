@@ -22,6 +22,7 @@ import { checkVersion } from '../api/update';
 import BrandMark from './BrandMark';
 import ThemeSwitcher from '../theme/ThemeSwitcher';
 import { useEventStream } from '../events/EventStreamContext';
+import { useBranding } from '../branding/BrandingContext';
 
 const { Header, Sider, Content } = Layout;
 const { Text } = Typography;
@@ -34,6 +35,7 @@ const MainLayout: React.FC = () => {
   const { message } = App.useApp();
   const { token } = antdTheme.useToken();
   const stream = useEventStream();
+  const { branding } = useBranding();
 
   const [version, setVersion] = useState<string>('获取中…');
   const [hasUpdate, setHasUpdate] = useState(false);
@@ -181,7 +183,7 @@ const MainLayout: React.FC = () => {
         >
           <BrandMark size={24} color="#F6821F" />
           <Text strong style={{ color: '#fff', fontSize: 14.5, letterSpacing: 0.3 }}>
-            Cloudflared 隧道管理器
+            {branding.app_name}
           </Text>
         </div>
         <Menu

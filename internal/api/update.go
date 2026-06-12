@@ -107,6 +107,9 @@ func (h *UpdateHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Start the log fresh so the web UI streams only this run's steps.
+	h.updater.ResetLog(version.Number, rel.Tag)
+
 	if err := h.updater.StartUpdate(rel.Tag); err != nil {
 		h.logger.Error("self-update spawn failed", "err", err)
 		WriteError(w, http.StatusInternalServerError, CodeInternal,
@@ -122,4 +125,10 @@ func (h *UpdateHandler) Update(w http.ResponseWriter, r *http.Request) {
 		"to":      rel.Tag,
 		"message": "更新已开始，服务即将重启，请稍候…",
 	})
+}
+
+// Log returns the current self-update log (update.log) so the web UI can show
+// the live progress steps while an update runs.
+func (h *UpdateHandler) Log(w http.ResponseWriter, r *http.Request) {
+	WriteJSON(w, http.StatusOK, map[string]any{"content": h.updater.ReadLog()})
 }
