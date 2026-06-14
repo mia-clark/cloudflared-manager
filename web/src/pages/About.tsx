@@ -647,7 +647,7 @@ function renderEnvTab(opts: { token: TokenLike }) {
 
   const envs: Array<{ key: string; required: string; default: string; desc: string }> = [
     { key: 'CFDM_API_TOKEN',           required: '✓', default: '—',                desc: 'API 鉴权 Bearer 令牌，登录管理面板的凭证。建议 openssl rand -hex 32 生成。' },
-    { key: 'CFDM_HTTP_ADDR',           required: '',  default: ':8080',            desc: '监听地址，格式 :端口 或 ip:端口。' },
+    { key: 'CFDM_HTTP_ADDR',           required: '',  default: ':8080',            desc: '监听地址，可只填端口(如 8080，自动补为 :8080)或 :端口/ip:端口。' },
     { key: 'CFDM_DATA_DIR',            required: '',  default: '/var/lib/cfdmgrd', desc: '数据根目录。子目录：profiles/、logs/、stores/、bin/、meta.json、metrics.db。' },
     { key: 'CFDM_CORS_ORIGINS',        required: '',  default: '*',                desc: '逗号分隔的 CORS 白名单。前后端分离调试时填具体 origin。' },
     { key: 'CFDM_LOG_LEVEL',           required: '',  default: 'info',             desc: 'trace / debug / info / warn / error。' },

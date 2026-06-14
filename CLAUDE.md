@@ -101,7 +101,7 @@ API 烟测：`BASE=http://127.0.0.1:8080 TOKEN=dev bash scripts/api-smoke.sh`（
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `CFDM_API_TOKEN` | （必填） | API 鉴权令牌，登录后台凭证 |
-| `CFDM_HTTP_ADDR` | `:8080` | 监听地址 |
+| `CFDM_HTTP_ADDR` | `:8080` | 监听地址；可只填端口（如 `8080`，自动归一化为 `:8080`）或 `:端口`/`ip:端口` |
 | `CFDM_DATA_DIR` | `/var/lib/cfdmgrd` | 数据根目录（profiles/logs/stores/meta.json/metrics.db/bin） |
 | `CFDM_CORS_ORIGINS` | `*` | CORS 白名单 |
 | `CFDM_LOG_LEVEL` | `info` | trace/debug/info/warn/error |
