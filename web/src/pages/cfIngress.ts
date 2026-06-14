@@ -242,11 +242,17 @@ export function replaceRuleAt(config: CFTunnelConfig | null, index: number, rule
 // 按新的「公共主机名规则顺序」重排 ingress：把传入的有序 hostname 规则放前面，
 // 兜底规则（http_status:404 等无 hostname 的）始终保留在末尾。cloudflared 按 ingress
 // 顺序匹配，故顺序有意义；兜底必须最后。返回新 config（不改原数组）。
+//
+// 防御：orderedRules 里若混入了兜底规则也要先剔除——实例级聚合接口
+// （/configs/{id}/cf/public-hostnames）会把兜底行一并列出，调用方据此取出的有序规则
+// 会带上兜底；若不剔除，兜底会同时出现在中间（来自 orderedRules）和末尾（tail），
+// CF 校验直接 400（1056 Bad Configuration: Rule #N matching hostname ''，后续规则永不触发）。
 export function reorderHostnames(config: CFTunnelConfig | null, orderedRules: CFIngressRule[]): CFTunnelConfig {
   const base = config ?? {};
   const catchAll = (base.ingress ?? []).filter(isCatchAll);
   const tail = catchAll.length > 0 ? catchAll : [{ service: 'http_status:404' } as CFIngressRule];
-  return { ...base, ingress: [...orderedRules, ...tail] };
+  const hostnameRules = orderedRules.filter((r) => !isCatchAll(r));
+  return { ...base, ingress: [...hostnameRules, ...tail] };
 }
 
 // 删除指定下标处的规则，返回新 config。
