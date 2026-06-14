@@ -109,9 +109,13 @@ function action_save()
 	if su == "1" or su == "0" then uci:set("cfdmgrd", "main", "self_update", su) end
 	local ca = http.formvalue("cfd_autoupdate")
 	if ca == "1" or ca == "0" then uci:set("cfdmgrd", "main", "cfd_autoupdate", ca) end
-	-- 开机强制自启开关（与启停按钮维护的 enabled 互不干扰）。
+	-- 开机强制自启开关。勾选时顺带把持久运行状态置 1，保证下次开机/升级一定会启动
+	-- （即使当前是停止状态）。
 	local ba = http.formvalue("boot_autostart")
-	if ba == "1" or ba == "0" then uci:set("cfdmgrd", "main", "boot_autostart", ba) end
+	if ba == "1" or ba == "0" then
+		uci:set("cfdmgrd", "main", "boot_autostart", ba)
+		if ba == "1" then uci:set("cfdmgrd", "main", "enabled", "1") end
+	end
 	uci:commit("cfdmgrd")
 	http.prepare_content("application/json")
 	http.write_json({ ok = true })
@@ -175,7 +179,20 @@ function action_logs()
 	})
 end
 
+-- 把「持久运行状态」写进 UCI option enabled（/etc/config 跨重启、跨升级保留）。
+-- start_service 据此决定是否拉起，故重启/升级后都会保持上次的启停状态。
+local function set_run_state(v) -- v: "1" | "0"
+	if not uci:get("cfdmgrd", "main") then uci:set("cfdmgrd", "main", "cfdmgrd") end
+	uci:set("cfdmgrd", "main", "enabled", v)
+	uci:commit("cfdmgrd")
+end
+
 -- 服务控制：start/stop/restart/enable/disable
+--
+-- 关键：启停不仅作用于当前进程，还把「目标运行状态」持久化到 UCI enabled，
+-- 这样系统重启或升级核心/重装 ipk 后，都会保持用户上次选择的启停状态。
+-- 例外：勾选了「开机强制自启」(boot_autostart=1) 时，点停止只停当前进程、不改 enabled
+-- （也不 commit，故不会触发 reload 把进程又拉起来），于是下次开机仍会强制拉起。
 function action_control(act)
 	http.prepare_content("application/json")
 	local allow = { start = true, stop = true, restart = true, enable = true, disable = true }
@@ -183,16 +200,20 @@ function action_control(act)
 		http.write_json({ ok = false, error = "invalid action" })
 		return
 	end
-	-- 状态持久化：启停按钮把「期望运行状态」(enabled) 落盘，使系统重启后保持当前状态——
-	-- 停止 -> enabled=0（重启后不再自己跑起来）；启动/重启 -> enabled=1。
-	-- 「强制开机自启」(boot_autostart) 由保存配置单独控制，不在此改动。
+	local rc
 	if act == "start" or act == "restart" then
-		if not uci:get("cfdmgrd", "main") then uci:set("cfdmgrd", "main", "cfdmgrd") end
-		uci:set("cfdmgrd", "main", "enabled", "1"); uci:commit("cfdmgrd")
+		-- 先置 enabled=1（否则 start_service 会因「停止状态」拒绝启动），再执行。
+		set_run_state("1")
+		rc = sys.call(INIT .. " " .. act .. " >/dev/null 2>&1")
 	elseif act == "stop" then
-		if not uci:get("cfdmgrd", "main") then uci:set("cfdmgrd", "main", "cfdmgrd") end
-		uci:set("cfdmgrd", "main", "enabled", "0"); uci:commit("cfdmgrd")
+		rc = sys.call(INIT .. " stop >/dev/null 2>&1")
+		-- 默认把停止状态持久化；开启开机强制自启则保留 enabled=1（下次开机仍强制拉起）。
+		if u("boot_autostart", "0") ~= "1" then
+			set_run_state("0")
+		end
+	else
+		-- enable / disable：保留原始语义（直接操作 procd 开机自启 symlink）
+		rc = sys.call(INIT .. " " .. act .. " >/dev/null 2>&1")
 	end
-	local rc = sys.call(INIT .. " " .. act .. " >/dev/null 2>&1")
 	http.write_json({ ok = (rc == 0), running = is_running() })
 end
