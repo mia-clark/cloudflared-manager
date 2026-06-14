@@ -6,6 +6,8 @@ import type {
   BinaryList,
   AvailableList,
   BinaryItem,
+  AutoUpdateSettings,
+  AutoUpdateView,
   TrafficSeries,
   LiveStatus,
   Projection,
@@ -104,6 +106,18 @@ export const binariesApi = {
   activate: (version: string) =>
     client.post(`/api/v1/binaries/${encodeURIComponent(version)}/activate`),
   delete: (version: string) => client.delete(`/api/v1/binaries/${encodeURIComponent(version)}`),
+};
+
+// ── 二进制自动更新 API ─────────────────────────────────────────────────────────
+// 全部 snake_case。PUT 为部分更新（后端在当前设置上覆盖所发字段，DisallowUnknownFields
+// 严格——只能发 AutoUpdateSettings 里的 key）。run 异步触发，202 立即返回，进度走
+// binary.update 事件 + status 轮询。
+export const autoUpdateApi = {
+  get: () => client.get<AutoUpdateView>('/api/v1/binaries/auto-update'),
+  update: (patch: Partial<AutoUpdateSettings>) =>
+    client.put<AutoUpdateView>('/api/v1/binaries/auto-update', patch),
+  run: (opts?: { version?: string; apply?: boolean; force?: boolean }) =>
+    client.post('/api/v1/binaries/auto-update/run', opts || {}),
 };
 
 // ── Validate API ─────────────────────────────────────────────────────────────

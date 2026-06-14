@@ -179,6 +179,36 @@ export interface AvailableList {
   items: AvailableRelease[];
 }
 
+// ── 二进制自动更新（snake_case，对应 cfdupdate.Settings / Status）──────────────
+// 模式：full 全自动（下载+激活+滚动重启）｜download 仅下载｜notify 仅提示
+export type AutoUpdateMode = 'full' | 'download' | 'notify';
+
+export interface AutoUpdateSettings {
+  enabled: boolean;
+  mode: AutoUpdateMode;
+  interval_hours: number;
+  include_prerelease: boolean;
+  auto_rollback: boolean;
+  keep_versions: number;
+  health_grace_seconds: number;
+}
+
+export interface AutoUpdateStatus {
+  state: string; // idle|checking|downloading|applying|restarting|rolling_back
+  last_result: string; // up_to_date|updated|downloaded|notified|failed|rolled_back|""
+  last_error?: string;
+  last_check_at?: string; // RFC3339
+  active_version?: string;
+  latest_known?: string;
+  pending_version?: string;
+  in_progress: boolean;
+}
+
+export interface AutoUpdateView {
+  settings: AutoUpdateSettings;
+  status: AutoUpdateStatus;
+}
+
 // ── 历史流量（snake_case）────────────────────────────────────────────────────
 // 注意：cloudflared 无 per-tunnel 字节计数器；in = 请求数增量，out = 错误数增量，
 // conns = HA 连接数（非字节）。

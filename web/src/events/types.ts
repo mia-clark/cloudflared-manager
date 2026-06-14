@@ -7,7 +7,8 @@ export type EventType =
   | 'config.changed'
   | 'config.deleted'
   | 'log.line'
-  | 'alert';
+  | 'alert'
+  | 'binary.update';
 
 export interface BusEvent<T = unknown> {
   seq: number;
@@ -55,6 +56,19 @@ export interface AlertData {
   metric: string;
   fired_at: number;
   resolved_at: number;
+}
+
+// binary.update 事件载荷（对应 eventbus.BinaryUpdateData，snake_case）。
+// phase: checking|up_to_date|available|downloading|downloaded|applying|
+//        restarting|done|rolled_back|error
+export interface BinaryUpdateData {
+  phase: string;
+  version?: string;
+  from?: string;
+  to?: string;
+  instance_id?: string;
+  message?: string;
+  error?: string;
 }
 
 export type ConnState = 'idle' | 'connecting' | 'open' | 'closed' | 'error';

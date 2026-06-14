@@ -26,6 +26,7 @@ import { clearAPIToken, getAPIToken } from '../api/client';
 import { useTheme } from '../theme/ThemeContext';
 import { useBranding } from '../branding/BrandingContext';
 import { updateBranding } from '../api/branding';
+import AutoUpdateCard from '../components/AutoUpdateCard';
 
 const { Title, Text } = Typography;
 
@@ -176,6 +177,8 @@ const Settings: React.FC = () => {
         </Col>
 
       </Row>
+
+      <AutoUpdateCard />
 
       <Card
         title={<Space><TagsOutlined /> 品牌 / 标识</Space>}

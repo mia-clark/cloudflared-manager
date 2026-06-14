@@ -21,11 +21,14 @@ import {
   CloudDownloadOutlined,
   CheckCircleOutlined,
   DeleteOutlined,
+  CloudSyncOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons';
 
-import { binariesApi } from '../api/client';
-import type { BinaryItem, AvailableRelease } from '../api/types';
+import { binariesApi, autoUpdateApi } from '../api/client';
+import type { BinaryItem, AvailableRelease, AutoUpdateStatus } from '../api/types';
 import { fmtDateTime } from '../utils/time';
+import { useEventSubscription } from '../events/EventStreamContext';
 
 const { Title, Text } = Typography;
 
@@ -56,6 +59,10 @@ const Binaries: React.FC = () => {
   // 操作 loading
   const [actionLoading, setActionLoading] = useState<Record<string, boolean>>({});
 
+  // 自动更新状态（顶部状态条）
+  const [autoStatus, setAutoStatus] = useState<AutoUpdateStatus | null>(null);
+  const [autoRunning, setAutoRunning] = useState(false);
+
   const loadList = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -74,7 +81,52 @@ const Binaries: React.FC = () => {
     }
   }, []);
 
-  useEffect(() => { loadList(); }, [loadList]);
+  const loadAutoStatus = useCallback(async () => {
+    try {
+      const resp = await autoUpdateApi.get();
+      setAutoStatus(resp.data.status);
+    } catch {
+      setAutoStatus(null); // 503/404：后端不支持，静默降级（状态条不显示）
+    }
+  }, []);
+
+  useEffect(() => {
+    loadList();
+    loadAutoStatus();
+  }, [loadList, loadAutoStatus]);
+
+  // 自动更新事件：实时刷新已安装列表 + 自动更新状态，并在完成/回滚时提示。
+  useEventSubscription(['binary.update'], (e) => {
+    const phase = (e.data as { phase?: string } | undefined)?.phase;
+    loadAutoStatus();
+    if (phase === 'done') {
+      message.success('cloudflared 二进制已更新');
+      loadList();
+    } else if (phase === 'rolled_back') {
+      message.warning('新版本启动失败，已自动回滚到上一个版本');
+      loadList();
+    } else if (phase === 'error') {
+      loadList();
+    }
+  });
+
+  const handleAutoRun = async (opts: { apply?: boolean }, label: string) => {
+    setAutoRunning(true);
+    try {
+      await autoUpdateApi.run(opts);
+      message.success(`${label}已开始`);
+      setTimeout(loadAutoStatus, 300);
+    } catch (err: unknown) {
+      const e = err as { response?: { status?: number; data?: { error?: { message?: string } } } };
+      if (e.response?.status === 409) {
+        message.warning('已有更新任务在进行中，请稍候');
+      } else {
+        message.error(`${label}失败：` + (e.response?.data?.error?.message || '未知错误'));
+      }
+    } finally {
+      setAutoRunning(false);
+    }
+  };
 
   const handleCheckAvailable = async () => {
     setCheckLoading(true);
@@ -231,6 +283,49 @@ const Binaries: React.FC = () => {
           </Button>
         </Space>
       </div>
+
+      {autoStatus && (
+        <Alert
+          type={autoStatus.last_error ? 'warning' : autoStatus.in_progress ? 'info' : 'success'}
+          showIcon
+          icon={<CloudSyncOutlined />}
+          style={{ borderRadius: 10 }}
+          message={
+            <Space size={12} wrap>
+              <Text strong>自动更新</Text>
+              <Text type="secondary" style={{ fontSize: 13 }}>
+                当前 <Text code>{autoStatus.active_version || '—'}</Text>
+                {autoStatus.latest_known && (
+                  <> · 最新 <Text code>{autoStatus.latest_known}</Text></>
+                )}
+                {autoStatus.in_progress && <Tag color="processing" style={{ marginLeft: 8 }}>进行中…</Tag>}
+                {autoStatus.pending_version && (
+                  <Tag color="blue" style={{ marginLeft: 8 }}>待应用 {autoStatus.pending_version}</Tag>
+                )}
+              </Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                详细设置见「设置」页
+              </Text>
+            </Space>
+          }
+          action={
+            <Space>
+              <Button size="small" loading={autoRunning} onClick={() => handleAutoRun({}, '检查更新')}>
+                立即检查
+              </Button>
+              <Button
+                size="small"
+                type="primary"
+                icon={<ThunderboltOutlined />}
+                loading={autoRunning}
+                onClick={() => handleAutoRun({ apply: true }, '更新到最新')}
+              >
+                更新到最新
+              </Button>
+            </Space>
+          }
+        />
+      )}
 
       {error ? (
         <Alert
