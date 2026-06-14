@@ -18,6 +18,8 @@ import {
   App,
   Popconfirm,
   Tooltip,
+  Row,
+  Col,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { PlusOutlined, ReloadOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
@@ -28,13 +30,35 @@ const { Text } = Typography;
 
 const DNS_TYPES = ['A', 'AAAA', 'CNAME', 'TXT', 'MX', 'NS', 'SRV', 'CAA'];
 
+// 子域前缀 + zone → 完整记录名（仿 Cloudflare 官方：只填子域，根域名用 @）。
+function dnsCombine(subdomain: string, zoneName: string): string {
+  const s = (subdomain || '').trim().replace(/^\.+|\.+$/g, '');
+  if (!zoneName) return s;
+  if (!s || s === '@') return zoneName; // 根域名（apex）
+  const sl = s.toLowerCase();
+  const zl = zoneName.toLowerCase();
+  if (sl === zl || sl.endsWith('.' + zl)) return s; // 用户已填完整 FQDN，原样
+  return `${s}.${zoneName}`;
+}
+
+// 完整记录名 → 子域前缀（编辑回填）。等于 zone 本身 → @；在 zone 下 → 去掉后缀；否则原样。
+function dnsSplit(name: string, zoneName: string): string {
+  const n = (name || '').trim();
+  if (!zoneName || !n) return '';
+  const nl = n.toLowerCase();
+  const zl = zoneName.toLowerCase();
+  if (nl === zl) return '@';
+  if (nl.endsWith('.' + zl)) return n.slice(0, n.length - zoneName.length - 1);
+  return n;
+}
+
 interface Props {
   aid: string;
 }
 
 interface DNSFormValues {
   type: string;
-  name: string;
+  subdomain: string;
   content: string;
   proxied: boolean;
   ttl: number;
@@ -100,10 +124,12 @@ export default function DNSRecordsTab({ aid }: Props) {
     loadRecords(zoneId);
   }, [zoneId, loadRecords]);
 
+  const zoneName = zones.find((z) => z.id === zoneId)?.name || '';
+
   const openCreate = () => {
     setEditing(null);
     form.resetFields();
-    form.setFieldsValue({ type: 'CNAME', proxied: true, ttl: 1 });
+    form.setFieldsValue({ type: 'CNAME', subdomain: '', proxied: true, ttl: 1 });
     setModalOpen(true);
   };
 
@@ -112,7 +138,7 @@ export default function DNSRecordsTab({ aid }: Props) {
     form.resetFields();
     form.setFieldsValue({
       type: rec.type || 'CNAME',
-      name: rec.name || '',
+      subdomain: dnsSplit(rec.name || '', zoneName),
       content: rec.content || '',
       proxied: !!rec.proxied,
       ttl: rec.ttl ?? 1,
@@ -129,7 +155,7 @@ export default function DNSRecordsTab({ aid }: Props) {
     }
     const rec: CFDNSRecord = {
       type: values.type,
-      name: values.name.trim(),
+      name: dnsCombine(values.subdomain, zoneName),
       content: values.content.trim(),
       proxied: values.proxied,
       ttl: values.proxied ? 1 : values.ttl ?? 1,
@@ -224,6 +250,8 @@ export default function DNSRecordsTab({ aid }: Props) {
   ];
 
   const proxiedWatch = Form.useWatch('proxied', form);
+  const subdomainWatch = Form.useWatch('subdomain', form);
+  const fullName = dnsCombine(subdomainWatch || '', zoneName);
 
   return (
     <Card
@@ -278,33 +306,48 @@ export default function DNSRecordsTab({ aid }: Props) {
         okText="保存"
         cancelText="取消"
         destroyOnClose
-        width={520}
+        width={580}
       >
-        <Form form={form} layout="vertical" requiredMark="optional" style={{ marginTop: 8 }}>
-          <Space size={12} style={{ display: 'flex' }} align="start">
-            <Form.Item label="类型" name="type" rules={[{ required: true }]} style={{ width: 140 }}>
-              <Select options={DNS_TYPES.map((t) => ({ value: t, label: t }))} />
-            </Form.Item>
-            <Form.Item label="名称" name="name" rules={[{ required: true, message: '请输入记录名称' }]} style={{ flex: 1 }}>
-              <Input placeholder="app.example.com 或 @" />
-            </Form.Item>
-          </Space>
+        <Form form={form} layout="vertical" style={{ marginTop: 8 }}>
+          <Row gutter={16}>
+            <Col xs={24} sm={7}>
+              <Form.Item label="类型" name="type" rules={[{ required: true }]}>
+                <Select options={DNS_TYPES.map((t) => ({ value: t, label: t }))} />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={17}>
+              <Form.Item
+                label="名称（子域）"
+                name="subdomain"
+                tooltip="只填子域前缀（二级，如 app）；根域名填 @ 或留空。完整记录名 = 子域 + 当前所选 zone。"
+              >
+                <Input placeholder="app（根域名填 @ 或留空）" addonAfter={zoneName ? `.${zoneName}` : undefined} allowClear />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <div style={{ marginTop: -8, marginBottom: 14 }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              完整记录名：{fullName ? <Text code>{fullName}</Text> : <Text type="secondary">（选择 zone 并填子域后生成）</Text>}
+            </Text>
+          </div>
+
           <Form.Item label="内容" name="content" rules={[{ required: true, message: '请输入记录内容' }]}>
             <Input placeholder="如 1.2.3.4 / xxx.cfargotunnel.com" />
           </Form.Item>
-          <Space size={20} align="start">
-            <Form.Item label="Cloudflare 代理" name="proxied" valuePropName="checked">
-              <Switch checkedChildren="代理" unCheckedChildren="仅 DNS" />
-            </Form.Item>
-            <Form.Item
-              label="TTL（秒，1=自动）"
-              name="ttl"
-              tooltip="开启代理时 TTL 固定为自动（1）"
-              style={{ width: 180 }}
-            >
-              <InputNumber style={{ width: '100%' }} min={1} disabled={!!proxiedWatch} />
-            </Form.Item>
-          </Space>
+
+          <Row gutter={16} align="bottom">
+            <Col xs={12} sm={10}>
+              <Form.Item label="Cloudflare 代理" name="proxied" valuePropName="checked" tooltip="开启后经 Cloudflare 边缘代理（橙云）；仅 DNS 则直连。">
+                <Switch checkedChildren="代理" unCheckedChildren="仅 DNS" />
+              </Form.Item>
+            </Col>
+            <Col xs={12} sm={10}>
+              <Form.Item label="TTL（秒，1=自动）" name="ttl" tooltip="开启代理时 TTL 固定为自动（1）。">
+                <InputNumber style={{ width: '100%' }} min={1} precision={0} disabled={!!proxiedWatch} />
+              </Form.Item>
+            </Col>
+          </Row>
         </Form>
       </Modal>
     </Card>
