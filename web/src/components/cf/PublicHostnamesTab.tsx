@@ -221,6 +221,7 @@ export default function PublicHostnamesTab({ aid, tid }: Props) {
 
       <PublicHostnameModal
         open={modalOpen}
+        aid={aid}
         title={editing ? '编辑公共主机名' : '添加公共主机名'}
         initial={editing ? ingressRuleToForm(editing.rule) : undefined}
         onCancel={() => {
