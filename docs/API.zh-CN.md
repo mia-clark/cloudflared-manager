@@ -18,7 +18,7 @@
 
 | 项目 | 值 |
 |---|---|
-| 监听地址 | `CFDM_HTTP_ADDR`，默认 `:8080` |
+| 监听地址 | `CFDM_HTTP_ADDR`，可只填端口（如 `8080`，自动归一化为 `:8080`）或 `:端口`/`ip:端口`，默认 `:8080` |
 | 数据目录 | `CFDM_DATA_DIR`，默认 `/var/lib/cfdmgrd`（Windows 为 `%ProgramData%\cfdmgrd`）。子目录：`profiles/`（每实例一个 `<id>.yaml`）、`logs/`（`<id>.log`）、`stores/`、`bin/cloudflared/`、`meta.json` |
 | 鉴权 | 除 `GET /api/v1/health` 与 `/api/docs/*` 外，所有 `/api/v1/*` 都要求 `Authorization: Bearer <CFDM_API_TOKEN>` |
 | Content-Type | 除特别说明（`/raw`、`/import/*`、`/validate`、`/export/*`、WS）外，**请求/返回均为 `application/json; charset=utf-8`** |
@@ -102,7 +102,7 @@ cloudflared 没有 per-tunnel 字节计数器，只暴露 Prometheus 指标。`G
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `CFDM_API_TOKEN` | （必填） | API 鉴权令牌，缺失则启动失败 |
-| `CFDM_HTTP_ADDR` | `:8080` | 监听地址 |
+| `CFDM_HTTP_ADDR` | `:8080` | 监听地址；可只填端口（如 `8080`→`:8080`）或 `:端口`/`ip:端口` |
 | `CFDM_DATA_DIR` | `/var/lib/cfdmgrd` | 数据根目录（Windows 默认 `%ProgramData%\cfdmgrd`） |
 | `CFDM_CORS_ORIGINS` | `*` | CORS / WS Origin 白名单（CSV） |
 | `CFDM_LOG_LEVEL` | `info` | trace/debug/info/warn/error |

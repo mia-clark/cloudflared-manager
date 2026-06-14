@@ -104,7 +104,7 @@ export default function TunnelConfigTab({ aid, tid }: Props) {
         </Space>
       }
     >
-      <Form form={form} layout="vertical" requiredMark="optional">
+      <Form form={form} layout="vertical">
         <Form.Item
           label="WARP 路由（warp-routing.enabled）"
           name="warpRouting"

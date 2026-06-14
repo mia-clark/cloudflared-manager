@@ -25,7 +25,7 @@ function Section({ children }: { children: React.ReactNode }) {
 // 时长数字输入（秒）。precision=0 限制整数，避免 30.5 这类小数被 CF 的 ParseInt 拒绝。
 function SecondsField({ name, label, placeholder, tip }: { name: string; label: string; placeholder: string; tip: string }) {
   return (
-    <Col xs={12} sm={8} lg={6}>
+    <Col xs={12} sm={8}>
       <Form.Item label={label} name={name} tooltip={tip} style={{ marginBottom: 14 }}>
         <InputNumber min={0} precision={0} addonAfter="秒" placeholder={placeholder} style={{ width: '100%' }} />
       </Form.Item>
@@ -47,12 +47,12 @@ export default function OriginRequestFields() {
   return (
     <div>
       <Section>超时与连接（单位：秒）</Section>
-      <Row gutter={16}>
+      <Row gutter={16} align="bottom">
         <SecondsField name="connectTimeout" label="connectTimeout" placeholder="30" tip="建立到回源的 TCP 连接超时，默认 30 秒" />
         <SecondsField name="tlsTimeout" label="tlsTimeout" placeholder="10" tip="回源 TLS 握手超时，默认 10 秒" />
         <SecondsField name="tcpKeepAlive" label="tcpKeepAlive" placeholder="30" tip="TCP keep-alive 间隔，默认 30 秒" />
         <SecondsField name="keepAliveTimeout" label="keepAliveTimeout" placeholder="90" tip="空闲连接保活超时，默认 90 秒" />
-        <Col xs={12} sm={8} lg={6}>
+        <Col xs={12} sm={8}>
           <Form.Item label="keepAliveConnections" name="keepAliveConnections" tooltip="连接池最大空闲连接数，默认 100" style={{ marginBottom: 14 }}>
             <InputNumber min={0} precision={0} placeholder="100" style={{ width: '100%' }} />
           </Form.Item>
@@ -60,7 +60,7 @@ export default function OriginRequestFields() {
       </Row>
 
       <Section>回源行为</Section>
-      <Row gutter={16}>
+      <Row gutter={16} align="bottom">
         <ToggleField name="http2Origin" label="http2Origin" tip="以 HTTP/2 连接回源" />
         <ToggleField name="noTLSVerify" label="noTLSVerify" tip="跳过回源 TLS 证书校验（自签名证书常用）" />
         <ToggleField name="noHappyEyeballs" label="noHappyEyeballs" tip="禁用 Happy Eyeballs（IPv4/IPv6 并发拨号）" />
@@ -68,7 +68,7 @@ export default function OriginRequestFields() {
       </Row>
 
       <Section>回源标识与证书</Section>
-      <Row gutter={16}>
+      <Row gutter={16} align="bottom">
         <Col xs={24} md={12}>
           <Form.Item label="httpHostHeader" name="httpHostHeader" tooltip="覆盖发往回源的 Host 头" style={{ marginBottom: 14 }}>
             <Input placeholder="覆盖回源 Host 头" allowClear />
@@ -87,7 +87,7 @@ export default function OriginRequestFields() {
       </Row>
 
       <Section>出站代理（可选）</Section>
-      <Row gutter={16}>
+      <Row gutter={16} align="bottom">
         <Col xs={24} sm={8}>
           <Form.Item label="proxyType" name="proxyType" tooltip="如 socks，留空为直连" style={{ marginBottom: 14 }}>
             <Input placeholder="socks" allowClear />

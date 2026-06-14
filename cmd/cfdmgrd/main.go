@@ -83,6 +83,12 @@ func runServe(args []string) int {
 	}
 
 	logger := newLogger(cfg.LogLevel)
+	// CFDM_HTTP_ADDR 归一化（只填端口→:端口）若遇到无法识别的值，会把原值原样保留
+	// 交给 net.Listen 报错——这里把告警显式打出来（appcfg.Load 在 logger 之前运行，
+	// 只能先暂存文本），避免运营者对着打不开的面板一头雾水。
+	if cfg.HTTPAddrWarn != "" {
+		logger.Warn("listen addr normalize", slog.String("detail", cfg.HTTPAddrWarn))
+	}
 	logger.Info("starting cfdmgrd",
 		slog.String("addr", cfg.HTTPAddr),
 		slog.String("data_dir", cfg.DataDir),

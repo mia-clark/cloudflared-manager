@@ -52,6 +52,7 @@ export default function InstanceCFPanel({ id }: Props) {
   const { message } = App.useApp();
 
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [binding, setBinding] = useState<CFBinding | null>(null);
   const [tokenInfo, setTokenInfo] = useState<CFTokenInfo | null>(null);
 
@@ -107,6 +108,22 @@ export default function InstanceCFPanel({ id }: Props) {
       message.error('加载 Cloudflare 关联失败：' + errMsg(err));
     } finally {
       setLoading(false);
+    }
+  }, [id, message, loadHostnames]);
+
+  // 仅刷新关联/隧道状态（后端 BindingGet 会实时 GetTunnel 取最新 status），
+  // 不触发整面板骨架屏，体验更轻；同时刷新公共主机名表。
+  const refreshBinding = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const resp = await cfApi.getBinding(id);
+      setBinding(resp.data);
+      if (resp.data.bound) loadHostnames();
+      message.success('已刷新隧道状态');
+    } catch (err: unknown) {
+      message.error('刷新失败：' + errMsg(err));
+    } finally {
+      setRefreshing(false);
     }
   }, [id, message, loadHostnames]);
 
@@ -342,16 +359,21 @@ export default function InstanceCFPanel({ id }: Props) {
         title="Cloudflare 关联"
         style={{ borderRadius: 10 }}
         extra={
-          <Popconfirm
-            title="解除关联？"
-            description="仅断开本实例与该账号/隧道的关联，不影响 Cloudflare 上的隧道。"
-            okText="解绑"
-            okButtonProps={{ danger: true }}
-            cancelText="取消"
-            onConfirm={handleUnbind}
-          >
-            <Button size="small" danger icon={<DisconnectOutlined />}>解绑</Button>
-          </Popconfirm>
+          <Space>
+            <Button size="small" icon={<ReloadOutlined />} loading={refreshing} onClick={refreshBinding}>
+              刷新
+            </Button>
+            <Popconfirm
+              title="解除关联？"
+              description="仅断开本实例与该账号/隧道的关联，不影响 Cloudflare 上的隧道。"
+              okText="解绑"
+              okButtonProps={{ danger: true }}
+              cancelText="取消"
+              onConfirm={handleUnbind}
+            >
+              <Button size="small" danger icon={<DisconnectOutlined />}>解绑</Button>
+            </Popconfirm>
+          </Space>
         }
       >
         {!binding.match && (
