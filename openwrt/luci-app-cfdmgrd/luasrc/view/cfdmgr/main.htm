@@ -61,6 +61,12 @@
 	.cmx #cm_log{display:none;white-space:pre-wrap;word-break:break-all;background:#0b1020;color:#d1d5db;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.55;padding:12px 14px;border-radius:9px;max-height:280px;overflow:auto;margin-top:14px;border:1px solid rgba(255,255,255,.06)}
 	.cmx .cm-hint{font-size:12px;opacity:.6;margin-top:10px;line-height:1.5}
 
+	/* 运行日志框（与下载日志同风格，但默认常显、更高，随视口自适应） */
+	.cmx .cm-logbox{white-space:pre-wrap;word-break:break-all;background:#0b1020;color:#d1d5db;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.55;padding:12px 14px;border-radius:9px;max-height:60vh;min-height:240px;overflow:auto;border:1px solid rgba(255,255,255,.06);margin:0}
+	.cmx .cm-logstat{font-size:12.5px;opacity:.7;margin:0 0 12px;line-height:1.5}
+	.cmx .cm-auto{display:inline-flex;align-items:center;gap:5px;font-size:12.5px;opacity:.8;cursor:pointer;user-select:none}
+	.cmx .cm-auto input{width:auto;height:auto;margin:0}
+
 	.cmx #cm_toasts{position:fixed;top:16px;right:16px;z-index:99999;display:flex;flex-direction:column;gap:8px;max-width:360px}
 	.cmx .cm-toast{padding:11px 15px;border-radius:9px;color:#fff;font-size:13px;box-shadow:0 8px 24px rgba(0,0,0,.2);animation:cmIn .18s ease;display:flex;align-items:center;gap:9px;line-height:1.4}
 	.cmx .cm-toast.info{background:#2563eb}.cmx .cm-toast.success{background:#16a34a}.cmx .cm-toast.error{background:#dc2626}.cmx .cm-toast.warn{background:#d97706}
@@ -89,6 +95,7 @@
 	<div class="cm-tabs">
 		<button type="button" class="cm-tab active" data-cmtab="overview" onclick="switchTab('overview')">📊 <%:概览 / 控制%></button>
 		<button type="button" class="cm-tab" data-cmtab="core" onclick="switchTab('core')">⬇️ <%:核心下载%><span id="cm_tabdot" class="cm-dot" style="display:none"></span></button>
+		<button type="button" class="cm-tab" data-cmtab="logs" onclick="switchTab('logs')">📜 <%:运行日志%></button>
 	</div>
 
 	<!-- ============ Tab 1：概览 / 控制 ============ -->
@@ -129,8 +136,8 @@
 			<div class="cm-grid">
 				<div class="cm-field">
 					<label><%:监听地址%></label>
-					<input type="text" id="cfg_http_addr" placeholder=":18080">
-					<div class="cm-sub"><%:格式 :端口（所有网卡）或 ip:端口（指定网卡）。%></div>
+					<input type="text" id="cfg_http_addr" placeholder="18085 或 :18085">
+					<div class="cm-sub"><%:可只填端口（如 18085，监听所有网卡）；也可 :端口 或 ip:端口（指定网卡）。IPv6 单地址须加方括号，如 [::1]:18085。默认 :18085，与 frpc(:18080)/frps(:18090) 错开。%></div>
 				</div>
 				<div class="cm-field">
 					<label><%:日志级别%></label>
@@ -204,12 +211,32 @@
 
 	</div>
 
+	<!-- ============ Tab 3：运行日志 ============ -->
+	<div class="cm-panel" id="tab_logs" style="display:none">
+
+		<div class="cm-card">
+			<div class="cmx-h3">📜 <%:运行日志%></div>
+			<div class="cm-desc"><%:来自系统日志（logread）的 cfdmgrd 相关记录——含守护进程输出、启动错误与核心下载日志。服务启动失败时，这里能直接看到原因。%></div>
+			<div class="cm-logstat" id="cm_logstat">—</div>
+			<div class="cm-btns" style="margin-bottom:12px">
+				<button class="cm-btn sm" id="cm_logrefresh" onclick="loadLogs(this)"><%:刷新%></button>
+				<button class="cm-btn ghost sm" onclick="copySyslog(this)"><%:复制日志%></button>
+				<span class="cm-spacer"></span>
+				<label class="cm-auto"><input type="checkbox" id="cm_logauto" checked> <%:自动刷新%></label>
+			</div>
+			<pre id="cm_syslog" class="cm-logbox"><%:加载中…%></pre>
+			<div class="cm-hint"><%:只读展示，等价于命令行 logread -e cfdmgrd。需要更详细日志时，可到「概览 / 控制」页把日志级别调成 debug / trace 后重启服务。%></div>
+		</div>
+
+	</div>
+
 </div>
 
 <script type="text/javascript">//<![CDATA[
 	var BASE = '<%=luci.dispatcher.build_url("admin/services/cfdmgr")%>';
 	function $(id){ return document.getElementById(id); }
 
+	var logTimer = null;
 	function switchTab(name){
 		var tabs = document.querySelectorAll('.cm-tab');
 		for(var i=0;i<tabs.length;i++){
@@ -218,6 +245,14 @@
 		}
 		$('tab_overview').style.display = (name==='overview') ? '' : 'none';
 		$('tab_core').style.display = (name==='core') ? '' : 'none';
+		$('tab_logs').style.display = (name==='logs') ? '' : 'none';
+		// 进入日志页：立刻拉一次 + 起轮询（受「自动刷新」开关控制）；离开则停轮询省流量
+		if(name==='logs'){
+			loadLogs();
+			if(!logTimer){ logTimer = setInterval(function(){
+				if($('cm_logauto') && $('cm_logauto').checked){ loadLogs(); }
+			}, 4000); }
+		} else if(logTimer){ clearInterval(logTimer); logTimer = null; }
 	}
 
 	function toast(msg, type, sticky){
@@ -264,8 +299,8 @@
 		else { btn.textContent = btn.dataset.txt || btn.textContent; btn.disabled = false; }
 	}
 
-	var curPort = '18080';
-	function portFromAddr(a){ if(!a) return '18080'; var m=String(a).match(/:(\d+)\s*$/); return m?m[1]:'18080'; }
+	var curPort = '18085';
+	function portFromAddr(a){ if(!a) return '18085'; var m=String(a).match(/:(\d+)\s*$/); return m?m[1]:'18085'; }
 
 	function setPill(d){
 		var pill = $('cm_pill'), pt = $('cm_pilltxt');
@@ -354,6 +389,36 @@
 	}
 	function copyLog(btn){
 		var v = $('cm_log').textContent || '';
+		if(!v.trim()){ toast('<%:暂无日志可复制%>', 'warn'); return; }
+		copyText(v).then(function(){ toast('✓ <%:已复制日志%>', 'success'); })
+			.catch(function(){ toast('✗ <%:复制失败，请手动选择文本复制%>', 'error'); });
+	}
+
+	// ---- 运行日志（logread）----
+	function loadLogs(btn){
+		if(btn) busy(btn, true, '<%:刷新中…%>');
+		return req('logs').then(function(d){
+			var el = $('cm_syslog');
+			if(el){
+				// 仅当用户已滚到底部时才自动贴底，避免打断向上翻阅
+				var atBottom = (el.scrollHeight - el.scrollTop - el.clientHeight) < 40;
+				el.textContent = (d.log && d.log.trim()) ? d.log : '<%:（暂无 cfdmgrd 相关日志）%>';
+				if(atBottom){ el.scrollTop = el.scrollHeight; }
+			}
+			var st = $('cm_logstat');
+			if(st){
+				var run = d.running ? '🟢 <%:运行中%>' : '🔴 <%:已停止%>';
+				st.textContent = run + '　·　procd: ' + (d.status || '—');
+			}
+			if(btn) busy(btn, false);
+		}).catch(function(e){
+			if(btn) busy(btn, false);
+			var el = $('cm_syslog'); if(el){ el.textContent = '<%:读取日志失败：%>' + e.message; }
+		});
+	}
+	function copySyslog(btn){
+		var el = $('cm_syslog');
+		var v = el ? (el.textContent || '') : '';
 		if(!v.trim()){ toast('<%:暂无日志可复制%>', 'warn'); return; }
 		copyText(v).then(function(){ toast('✓ <%:已复制日志%>', 'success'); })
 			.catch(function(){ toast('✗ <%:复制失败，请手动选择文本复制%>', 'error'); });
