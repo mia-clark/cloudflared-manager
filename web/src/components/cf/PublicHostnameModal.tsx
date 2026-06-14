@@ -68,7 +68,9 @@ export default function PublicHostnameModal({
       okText="保存"
       cancelText="取消"
       destroyOnClose
-      width={680}
+      width={900}
+      style={{ top: 40 }}
+      styles={{ body: { maxHeight: 'calc(100vh - 220px)', overflowY: 'auto', paddingRight: 12 } }}
     >
       <Form form={form} layout="vertical" requiredMark="optional" style={{ marginTop: 8 }}>
         <PublicHostnameFormFields showManageDns={showManageDns} serviceTypeWatch={serviceType} />
