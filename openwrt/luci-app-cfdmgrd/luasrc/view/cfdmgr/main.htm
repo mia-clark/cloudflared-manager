@@ -42,6 +42,16 @@
 	.cmx .cm-inline{display:flex;gap:8px;align-items:stretch;flex-wrap:wrap}
 	.cmx .cm-inline input{flex:1 1 200px}
 
+	/* 开关（开机自启）—— 自带样式，独立于 .cm-field 通用 input 规则与主题，确保勾选态清晰可见 */
+	.cmx .cm-toggle{grid-column:1/-1;display:flex;flex-direction:column;min-width:0}
+	.cmx .cm-switch{display:inline-flex;align-items:center;gap:9px;cursor:pointer;user-select:none;position:relative}
+	.cmx .cm-switch input{position:absolute;opacity:0;width:0;height:0;margin:0}
+	.cmx .cm-switch .cm-switch-track{flex:0 0 auto;width:42px;height:23px;border-radius:23px;background:#c7ccd6;position:relative;transition:background .15s}
+	.cmx .cm-switch .cm-switch-knob{position:absolute;top:2px;left:2px;width:19px;height:19px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.3);transition:transform .15s}
+	.cmx .cm-switch input:checked + .cm-switch-track{background:#16a34a}
+	.cmx .cm-switch input:checked + .cm-switch-track .cm-switch-knob{transform:translateX(19px)}
+	.cmx .cm-switch .cm-switch-text{font-size:13px;font-weight:500;opacity:.9}
+
 	.cmx .cm-btns{display:flex;flex-wrap:wrap;gap:9px;align-items:center;margin-top:4px}
 	.cmx .cm-spacer{flex:1 1 auto;min-width:8px}
 	.cmx .cm-btn{display:inline-flex;align-items:center;gap:6px;cursor:pointer;border:1px solid transparent;border-radius:8px;height:auto;padding:8px 16px;font-size:13px;font-weight:600;color:#fff;background:#f48120;transition:filter .12s,box-shadow .12s,opacity .12s;line-height:1.2}
@@ -177,10 +187,14 @@
 					</select>
 					<div class="cm-sub"><%:管理器自身（cfdmgrd）的 Web 端一键自更新；OpenWrt 上默认关闭以免与包管理器冲突。%></div>
 				</div>
-				<div class="cm-field">
-					<label><input type="checkbox" id="cfg_boot_autostart" style="margin-right:6px;vertical-align:-2px"><%:开机自动启动（强制）%></label>
-					<div class="cm-sub"><%:勾选：即使在本页点了「停止」，系统重启或升级核心后也会强制自动启动。不勾选（默认）：保持上次的启停状态——停止的重启后仍停止，运行的重启后仍运行。%></div>
-				</div>
+				<div class="cm-toggle">
+						<label class="cm-switch">
+							<input type="checkbox" id="cfg_boot_autostart">
+							<span class="cm-switch-track"><span class="cm-switch-knob"></span></span>
+							<span class="cm-switch-text"><%:开机自动启动（强制）%></span>
+						</label>
+						<div class="cm-sub"><%:勾选：即使在本页点了「停止」，系统重启或升级核心后也会强制自动启动。不勾选（默认）：保持上次的启停状态——停止的重启后仍停止，运行的重启后仍运行。（改动需点下方「保存并重启生效」后生效）%></div>
+					</div>
 			</div>
 
 			<div class="cm-btns" style="margin-top:16px">
