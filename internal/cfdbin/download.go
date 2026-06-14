@@ -141,6 +141,44 @@ func (d *Downloader) Available(ctx context.Context, limit int) ([]AvailableRelea
 	return out, nil
 }
 
+// ResolveLatest returns the newest release tag the proxy knows about,
+// without downloading anything. When includePrerelease is false the most
+// recent non-prerelease tag is returned (falling back to the absolute
+// newest if every recent release is a prerelease). Used by the auto-updater
+// to compare against the active version cheaply.
+func (d *Downloader) ResolveLatest(ctx context.Context, includePrerelease bool) (string, error) {
+	if !includePrerelease {
+		// The list endpoint carries the prerelease flag; scan for the newest
+		// stable. per_page=15 is plenty to skip a run of prereleases.
+		body, err := d.proxyGetJSON(ctx, fmt.Sprintf("/%s?per_page=%d", d.key(), 15))
+		if err == nil {
+			var list proxyList
+			if jerr := json.Unmarshal(body, &list); jerr == nil {
+				for _, r := range list.Releases {
+					if !r.Prerelease && strings.TrimSpace(r.Tag) != "" {
+						return r.Tag, nil
+					}
+				}
+				// every recent release is a prerelease — fall through to /latest
+			}
+		}
+	}
+	// Either prereleases are allowed, or the stable scan found nothing /
+	// failed: resolve the proxy's canonical "latest".
+	body, err := d.proxyGetJSON(ctx, "/"+d.key()+"/latest")
+	if err != nil {
+		return "", fmt.Errorf("resolve latest: %w", err)
+	}
+	var rel proxyRelease
+	if err := json.Unmarshal(body, &rel); err != nil {
+		return "", fmt.Errorf("decode latest: %w", err)
+	}
+	if strings.TrimSpace(rel.Tag) == "" {
+		return "", fmt.Errorf("latest release has no tag")
+	}
+	return rel.Tag, nil
+}
+
 // shaLineRE captures one "filename: hex64" line from a release body's
 // "### SHA256 Checksums" section.
 var shaLineRE = regexp.MustCompile(`(?m)^([A-Za-z0-9._\-]+):\s+([a-fA-F0-9]{64})\s*$`)

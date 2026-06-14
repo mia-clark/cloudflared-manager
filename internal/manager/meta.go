@@ -25,6 +25,25 @@ type Meta struct {
 	// Branding holds the operator-customizable UI brand name and browser
 	// title. nil / empty fields resolve to the Default* constants on read.
 	Branding *Branding `json:"branding,omitempty"`
+	// AutoUpdate holds the cloudflared binary auto-update settings. nil means
+	// "never configured" — the daemon seeds it from env defaults on first
+	// boot. Once present, it is the authoritative persisted configuration
+	// (UI overrides win over env defaults).
+	AutoUpdate *AutoUpdateMeta `json:"auto_update,omitempty"`
+}
+
+// AutoUpdateMeta is the persisted cloudflared-binary auto-update configuration
+// (stored in meta.json). It is a pure data record: the cfdupdate package owns
+// the behaviour and converts to/from this struct, so manager carries no
+// dependency on cfdupdate (no import cycle).
+type AutoUpdateMeta struct {
+	Enabled            bool   `json:"enabled"`
+	Mode               string `json:"mode"`
+	IntervalHours      int    `json:"interval_hours"`
+	IncludePrerelease  bool   `json:"include_prerelease"`
+	AutoRollback       bool   `json:"auto_rollback"`
+	KeepVersions       int    `json:"keep_versions"`
+	HealthGraceSeconds int    `json:"health_grace_seconds"`
 }
 
 // Branding is the persisted, operator-editable UI branding. Stored inside
@@ -138,7 +157,31 @@ func (s *metaStore) snapshot() Meta {
 		b := *s.data.Branding
 		m.Branding = &b
 	}
+	if s.data.AutoUpdate != nil {
+		a := *s.data.AutoUpdate
+		m.AutoUpdate = &a
+	}
 	return m
+}
+
+// autoUpdate returns a copy of the stored auto-update config and whether it
+// has ever been set. (nil, false) means "seed from env defaults".
+func (s *metaStore) autoUpdate() (AutoUpdateMeta, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.data.AutoUpdate == nil {
+		return AutoUpdateMeta{}, false
+	}
+	return *s.data.AutoUpdate, true
+}
+
+// setAutoUpdate persists the auto-update config wholesale (atomic write).
+func (s *metaStore) setAutoUpdate(a AutoUpdateMeta) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ac := a
+	s.data.AutoUpdate = &ac
+	return s.flushLocked()
 }
 
 // branding returns the raw stored branding (no defaults applied). A zero
