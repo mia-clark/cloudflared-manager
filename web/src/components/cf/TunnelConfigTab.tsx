@@ -5,8 +5,6 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   Card,
   Form,
-  Input,
-  InputNumber,
   Switch,
   Button,
   Space,
@@ -23,6 +21,7 @@ import {
   originRequestToForm,
   type OriginRequestFormValues,
 } from '../../pages/cfIngress';
+import OriginRequestFields from './OriginRequestFields';
 
 const { Text } = Typography;
 
@@ -128,65 +127,7 @@ export default function TunnelConfigTab({ aid, tid }: Props) {
             {
               key: 'or',
               label: '全局 originRequest',
-              children: (
-                <>
-                  <Space size={12} style={{ display: 'flex' }} align="start">
-                    <Form.Item label="connectTimeout" name="connectTimeout" style={{ flex: 1 }}>
-                      <Input placeholder="30s" allowClear />
-                    </Form.Item>
-                    <Form.Item label="tlsTimeout" name="tlsTimeout" style={{ flex: 1 }}>
-                      <Input placeholder="10s" allowClear />
-                    </Form.Item>
-                  </Space>
-                  <Space size={12} style={{ display: 'flex' }} align="start">
-                    <Form.Item label="tcpKeepAlive" name="tcpKeepAlive" style={{ flex: 1 }}>
-                      <Input placeholder="30s" allowClear />
-                    </Form.Item>
-                    <Form.Item label="keepAliveTimeout" name="keepAliveTimeout" style={{ flex: 1 }}>
-                      <Input placeholder="90s" allowClear />
-                    </Form.Item>
-                    <Form.Item label="keepAliveConnections" name="keepAliveConnections" style={{ width: 180 }}>
-                      <InputNumber style={{ width: '100%' }} min={0} placeholder="100" />
-                    </Form.Item>
-                  </Space>
-                  <Space size={20} wrap style={{ marginBottom: 12 }}>
-                    <Form.Item label="noHappyEyeballs" name="noHappyEyeballs" valuePropName="checked" style={{ marginBottom: 0 }}>
-                      <Switch size="small" />
-                    </Form.Item>
-                    <Form.Item label="noTLSVerify" name="noTLSVerify" valuePropName="checked" style={{ marginBottom: 0 }}>
-                      <Switch size="small" />
-                    </Form.Item>
-                    <Form.Item label="disableChunkedEncoding" name="disableChunkedEncoding" valuePropName="checked" style={{ marginBottom: 0 }}>
-                      <Switch size="small" />
-                    </Form.Item>
-                    <Form.Item label="http2Origin" name="http2Origin" valuePropName="checked" style={{ marginBottom: 0 }}>
-                      <Switch size="small" />
-                    </Form.Item>
-                  </Space>
-                  <Space size={12} style={{ display: 'flex' }} align="start">
-                    <Form.Item label="httpHostHeader" name="httpHostHeader" style={{ flex: 1 }}>
-                      <Input placeholder="覆盖回源 Host 头" allowClear />
-                    </Form.Item>
-                    <Form.Item label="originServerName" name="originServerName" style={{ flex: 1 }}>
-                      <Input placeholder="回源 TLS SNI" allowClear />
-                    </Form.Item>
-                  </Space>
-                  <Form.Item label="caPool" name="caPool">
-                    <Input placeholder="/path/to/ca.pem" allowClear />
-                  </Form.Item>
-                  <Space size={12} style={{ display: 'flex' }} align="start">
-                    <Form.Item label="proxyType" name="proxyType" style={{ flex: 1 }}>
-                      <Input placeholder="socks" allowClear />
-                    </Form.Item>
-                    <Form.Item label="proxyAddress" name="proxyAddress" style={{ flex: 1 }}>
-                      <Input placeholder="127.0.0.1" allowClear />
-                    </Form.Item>
-                    <Form.Item label="proxyPort" name="proxyPort" style={{ width: 160 }}>
-                      <InputNumber style={{ width: '100%' }} min={0} max={65535} placeholder="1080" />
-                    </Form.Item>
-                  </Space>
-                </>
-              ),
+              children: <OriginRequestFields />,
             },
           ]}
         />

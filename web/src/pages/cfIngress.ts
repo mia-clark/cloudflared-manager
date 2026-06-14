@@ -60,10 +60,14 @@ export function buildService(type: ServiceType, target: string): string {
 
 // 表单里 originRequest 区段的扁平字段集合（access 用 access_* 前缀打平）。
 export interface OriginRequestFormValues {
-  connectTimeout?: string;
-  tlsTimeout?: string;
-  tcpKeepAlive?: string;
-  keepAliveTimeout?: string;
+  // 时长字段以「秒（数字）」表达：Cloudflare 隧道配置 API 的 originRequest 把这些
+  // 时长按数字秒下发（默认 connectTimeout 30 / tlsTimeout 10 / tcpKeepAlive 30 /
+  // keepAliveTimeout 90）。务必发 JSON 数字，发成字符串 "10" 会被 CF 以
+  // strconv.ParseInt 解析失败（http 400 / 1056 Bad Configuration）。
+  connectTimeout?: number;
+  tlsTimeout?: number;
+  tcpKeepAlive?: number;
+  keepAliveTimeout?: number;
   keepAliveConnections?: number;
   noHappyEyeballs?: boolean;
   noTLSVerify?: boolean;
@@ -81,15 +85,18 @@ export interface OriginRequestFormValues {
 }
 
 const STRING_KEYS: (keyof OriginRequestFormValues)[] = [
-  'connectTimeout',
-  'tlsTimeout',
-  'tcpKeepAlive',
-  'keepAliveTimeout',
   'httpHostHeader',
   'originServerName',
   'caPool',
   'proxyType',
   'proxyAddress',
+];
+// 时长字段：CF API 要求「数字秒」。表单用 InputNumber（秒），发送时强制为整数数字。
+const DURATION_KEYS: (keyof OriginRequestFormValues)[] = [
+  'connectTimeout',
+  'tlsTimeout',
+  'tcpKeepAlive',
+  'keepAliveTimeout',
 ];
 const NUMBER_KEYS: (keyof OriginRequestFormValues)[] = ['keepAliveConnections', 'proxyPort'];
 const BOOL_KEYS: (keyof OriginRequestFormValues)[] = [
@@ -99,12 +106,38 @@ const BOOL_KEYS: (keyof OriginRequestFormValues)[] = [
   'http2Origin',
 ];
 
+// 把时长值统一成「秒（数字）」。兼容三种来源：① 数字（已是秒）② 纯数字字符串
+// "30" ③ 旧的 Go 时长字符串 "30s" / "1m30s" / "500ms"（历史保存的配置可能是这种）。
+// 解析不出有效数字时返回 undefined（该字段不下发）。
+function toSeconds(v: unknown): number | undefined {
+  if (v == null || v === '') return undefined;
+  if (typeof v === 'number') return Number.isFinite(v) ? v : undefined;
+  const s = String(v).trim();
+  if (s === '') return undefined;
+  if (/^\d+(\.\d+)?$/.test(s)) return Number(s);
+  const mult: Record<string, number> = { ns: 1e-9, us: 1e-6, 'µs': 1e-6, ms: 1e-3, s: 1, m: 60, h: 3600 };
+  const re = /(\d+(?:\.\d+)?)(ns|us|µs|ms|s|m|h)/g;
+  let total = 0;
+  let matched = false;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(s)) !== null) {
+    matched = true;
+    total += Number(m[1]) * (mult[m[2]] ?? 1);
+  }
+  return matched ? total : undefined;
+}
+
 // 表单值 → originRequest（剔空）。无任何字段时返回 undefined。
 export function buildOriginRequest(v: OriginRequestFormValues): CFOriginRequest | undefined {
   const out: Record<string, unknown> = {};
   for (const k of STRING_KEYS) {
     const val = v[k] as string | undefined;
     if (val != null && String(val).trim() !== '') out[k] = String(val).trim();
+  }
+  // 时长字段：转成整数秒的 JSON「数字」下发（CF 用 strconv.ParseInt 校验，发字符串会 400）。
+  for (const k of DURATION_KEYS) {
+    const n = toSeconds(v[k]);
+    if (n != null) out[k] = Math.round(n);
   }
   for (const k of NUMBER_KEYS) {
     const val = v[k] as number | undefined;
@@ -131,6 +164,11 @@ export function originRequestToForm(or?: CFOriginRequest): OriginRequestFormValu
   for (const k of [...STRING_KEYS, ...NUMBER_KEYS, ...BOOL_KEYS]) {
     if (o[k] != null) (out as Record<string, unknown>)[k] = o[k];
   }
+  // 时长字段回填成「秒（数字）」，兼容旧配置里存成 "30s" 字符串的情况。
+  for (const k of DURATION_KEYS) {
+    const n = toSeconds(o[k]);
+    if (n != null) (out as Record<string, unknown>)[k] = n;
+  }
   if (access.required != null) out.access_required = !!access.required;
   if (access.teamName != null) out.access_teamName = String(access.teamName);
   if (Array.isArray(access.audTag)) out.access_audTag = access.audTag.map((x) => String(x));
@@ -147,7 +185,7 @@ export function originRequestTags(or?: CFOriginRequest): string[] {
   if (o.disableChunkedEncoding) tags.push('disableChunkedEncoding');
   if (o.httpHostHeader) tags.push(`Host: ${o.httpHostHeader}`);
   if (o.originServerName) tags.push(`SNI: ${o.originServerName}`);
-  if (o.connectTimeout) tags.push(`connectTimeout=${o.connectTimeout}`);
+  if (o.connectTimeout) tags.push(`connectTimeout=${o.connectTimeout}s`);
   const access = (o.access || {}) as Record<string, unknown>;
   if (access.required) tags.push('Access');
   return tags;
