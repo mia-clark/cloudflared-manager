@@ -22,12 +22,36 @@ CONF=cfdmgrd
 
 # ---------------------------------------------------------------------------
 # 生成强随机 16 进制令牌 (48 字符)。取不到随机源时返回空串 (由 ensure_token 拒绝启动)。
+#
+# 注意：busybox 的 applet 集合按固件裁剪，不能假定某个工具一定存在
+# (实测 ImmortalWrt 24.10 x86/64 默认无 od applet -> 旧实现 token 恒为空 -> 拒绝启动)。
+# 故按可用性逐级回退，任一产出 >=32 字符即采用：
+#   ① od        ② hexdump   ③ sha256sum  ④ md5sum(两段拼接)
+#   ⑤ 内核 uuid (/proc/sys/kernel/random/uuid，几乎必有)
+#   ⑥ 直接从 /dev/urandom 流筛十六进制字符 (tr/head 为核心 applet)
+# 全部失败 (无随机源) 才返回空串，由 ensure_token 拒绝以弱令牌启动。
 # ---------------------------------------------------------------------------
 gen_token() {
-	# 读 24 字节随机数 -> 48 个 16 进制字符 (od/dd 均为 busybox 默认 applet)。
-	# 用 bs=1 count=24 直读字符设备，避免从管道短读导致长度不定。
 	local t=''
-	[ -r /dev/urandom ] && t="$(dd if=/dev/urandom bs=1 count=24 2>/dev/null | od -An -tx1 2>/dev/null | tr -d ' \n')"
+	if [ -r /dev/urandom ] && command -v od >/dev/null 2>&1; then
+		t="$(dd if=/dev/urandom bs=1 count=24 2>/dev/null | od -An -tx1 2>/dev/null | tr -d ' \n')"
+	fi
+	if [ "${#t}" -lt 32 ] && [ -r /dev/urandom ] && command -v hexdump >/dev/null 2>&1; then
+		t="$(dd if=/dev/urandom bs=1 count=24 2>/dev/null | hexdump -v -e '/1 "%02x"' 2>/dev/null)"
+	fi
+	if [ "${#t}" -lt 32 ] && [ -r /dev/urandom ] && command -v sha256sum >/dev/null 2>&1; then
+		t="$(dd if=/dev/urandom bs=1 count=64 2>/dev/null | sha256sum 2>/dev/null | cut -c1-48)"
+	fi
+	if [ "${#t}" -lt 32 ] && [ -r /dev/urandom ] && command -v md5sum >/dev/null 2>&1; then
+		t="$(dd if=/dev/urandom bs=1 count=64 2>/dev/null | md5sum 2>/dev/null | cut -c1-32)$(dd if=/dev/urandom bs=1 count=64 2>/dev/null | md5sum 2>/dev/null | cut -c1-16)"
+	fi
+	if [ "${#t}" -lt 32 ] && [ -r /proc/sys/kernel/random/uuid ]; then
+		t="$(cat /proc/sys/kernel/random/uuid 2>/dev/null | tr -d '-')$(cat /proc/sys/kernel/random/uuid 2>/dev/null | tr -d '-')"
+		t="$(printf '%s' "$t" | cut -c1-48)"
+	fi
+	if [ "${#t}" -lt 32 ] && [ -r /dev/urandom ]; then
+		t="$(tr -dc 'a-f0-9' < /dev/urandom 2>/dev/null | head -c 48 2>/dev/null)"
+	fi
 	printf '%s' "$t"
 }
 
@@ -44,7 +68,7 @@ ensure_token() {
 
 	t="$(gen_token)"
 	if [ "${#t}" -lt 32 ]; then
-		logger -t cfdmgrd "ERROR: 无法生成安全随机令牌 (缺少 /dev/urandom)，拒绝以弱令牌启动。请手动设置: uci set cfdmgrd.main.token=<你的令牌>; uci commit cfdmgrd; /etc/init.d/cfdmgrd restart"
+		logger -t cfdmgrd "ERROR: 无法生成安全随机令牌 (系统缺少 od/hexdump/sha256sum/md5sum 等十六进制工具，且无 /dev/urandom 与内核 uuid 随机源)，拒绝以弱令牌启动。请手动设置: uci set cfdmgrd.main.token=<你的令牌>; uci commit cfdmgrd; /etc/init.d/cfdmgrd restart"
 		return 1
 	fi
 	uci -q set "${CONF}.main.token=$t"
@@ -66,7 +90,7 @@ start_service() {
 	ensure_token || return 1
 
 	config_load "$CONF"
-	config_get      http_addr      main http_addr      ':18080'
+	config_get      http_addr      main http_addr      ':18085'
 	config_get      token          main token          ''
 	config_get      data_dir       main data_dir       '/usr/lib/cfdmgrd'
 	config_get      log_level      main log_level      'info'

@@ -85,7 +85,7 @@ opkg install luci-app-cfdmgrd_<版本>-1_all.ipk
 
 ```sh
 cfdmgrd-fetch latest                 # 下载/更新最新核心
-uci set cfdmgrd.main.http_addr=':18080'
+uci set cfdmgrd.main.http_addr=':18085'   # 也可只填端口: uci set cfdmgrd.main.http_addr='18085'
 uci set cfdmgrd.main.token='<你的令牌>'   # 留空则首启自动生成
 uci commit cfdmgrd
 /etc/init.d/cfdmgrd enable
@@ -99,7 +99,7 @@ uci get cfdmgrd.main.token           # 忘记令牌时查看
 | 选项 | 默认 | 说明 |
 |---|---|---|
 | `enabled` | `1` | 是否启用（0=不启动） |
-| `http_addr` | `:18080` | 监听地址 `:端口` 或 `ip:端口` |
+| `http_addr` | `:18085` | 监听地址：可只填端口（如 `18085`）或 `:端口` / `ip:端口`。默认 `:18085`，与 frpc-manager(`:18080`)、frps-manager(`:18090`) 错开，三者可同机共存不撞端口 |
 | `token` | 空 | API 登录令牌；留空首启自动生成 |
 | `data_dir` | `/usr/lib/cfdmgrd` | 数据根目录（须持久，含 cloudflared 二进制） |
 | `log_level` | `info` | trace/debug/info/warn/error |

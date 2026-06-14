@@ -1,8 +1,10 @@
 config cfdmgrd 'main'
 	# 是否启用服务 (0=禁用，init 脚本将不启动)
 	option enabled '1'
-	# 监听地址，格式 :端口 或 ip:端口 (OpenWrt 默认 :18080，避开 uhttpd 与常见占用)
-	option http_addr ':18080'
+	# 监听地址：可只填端口(如 18085，自动补为 :18085)，或 :端口 / ip:端口；
+	# IPv6 单地址须加方括号，如 [::1]:18085。
+	# OpenWrt 默认 :18085——与 frpc-manager(:18080) / frps-manager(:18090) 错开，三者可同机共存。
+	option http_addr ':18085'
 	# API 登录令牌 (后台访问凭证)。留空时首次启动自动生成强随机令牌，
 	# 之后用 `uci get cfdmgrd.main.token` 查看。
 	option token ''

@@ -30,6 +30,7 @@ function index()
 	entry({"admin", "services", "cfdmgr", "save"},            call("action_save"))
 	entry({"admin", "services", "cfdmgr", "download"},        call("action_download"))
 	entry({"admin", "services", "cfdmgr", "download_status"}, call("action_download_status"))
+	entry({"admin", "services", "cfdmgr", "logs"},            call("action_logs"))
 	entry({"admin", "services", "cfdmgr", "control"},         call("action_control")).leaf = true
 end
 
@@ -57,7 +58,7 @@ function action_info()
 		downloading = fs.access(DL_LOCK) and true or false,
 		cfg = {
 			enabled        = u("enabled", "1"),
-			http_addr      = u("http_addr", ":18080"),
+			http_addr      = u("http_addr", ":18085"),
 			token          = u("token", ""),
 			data_dir       = u("data_dir", "/usr/lib/cfdmgrd"),
 			log_level      = u("log_level", "info"),
@@ -81,8 +82,21 @@ function action_save()
 	end
 	local http_addr = http.formvalue("http_addr")
 	if http_addr ~= nil and http_addr ~= "" then
-		-- 允许 :端口 或 ip:端口
-		uci:set("cfdmgrd", "main", "http_addr", http_addr)
+		-- 归一化：仅填端口（纯数字）时自动补冒号 -> :端口，用户不必手写冒号；
+		-- 含冒号的 :端口 / ip:端口 / [::]:端口 原样保存（可 bind 性最终由守护进程 net.Listen 判定）。
+		-- Lua 的 %d 仅匹配 ASCII 0-9，可挡住全角数字（如 １８０８５）误判为纯端口。
+		local addr = util.trim(http_addr)
+		local port_only = addr:match("^(%d+)$")
+		if port_only ~= nil then
+			local p = tonumber(port_only)
+			if not p or p < 1 or p > 65535 then
+				http.prepare_content("application/json")
+				http.write_json({ ok = false, error = "端口需为 1-65535 的数字：" .. http_addr })
+				return
+			end
+			addr = ":" .. port_only
+		end
+		uci:set("cfdmgrd", "main", "http_addr", addr)
 	end
 	setv("token",     http.formvalue("token"),     false)
 	setv("data_dir",  http.formvalue("data_dir"),  false)
@@ -133,6 +147,27 @@ function action_download_status()
 		has_binary = has,
 		version    = ver,
 		log        = logtail,
+	})
+end
+
+-- 运行日志：系统日志(logread)里 cfdmgrd 相关行。
+-- procd 已把守护进程 stdout/stderr 接入 logd（见 init.d 的 procd_set_param stdout/stderr 1），
+-- 故 logread 同时含守护进程自身输出、init.d 的启动错误、cfdmgrd-fetch 下载日志——
+-- 服务启动失败时在这里能直接看到原因（如 token 生成失败、端口占用、panic）。
+function action_logs()
+	http.prepare_content("application/json")
+	-- 行数 clamp 到 [50,1000]，并强转数字后再拼命令，杜绝注入
+	local lines = tonumber(http.formvalue("lines") or "") or 300
+	if lines < 50 then lines = 50 end
+	if lines > 1000 then lines = 1000 end
+	-- grep -iE 匹配守护进程(cfdmgrd) 与拉取脚本(cfdmgrd-fetch)；grep 为 busybox 核心 applet
+	local log = sys.exec("logread 2>/dev/null | grep -iE 'cfdmgr' | tail -n " .. lines)
+	-- procd 实例状态：running / "active with no instances"(拉起失败) / inactive
+	local st = util.trim(sys.exec(util.shellquote(INIT) .. " status 2>&1"))
+	http.write_json({
+		log     = log or "",
+		status  = st,
+		running = is_running(),
 	})
 end
 
