@@ -33,6 +33,23 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	return true
 }
 
+// decodeJSONOptional is like decodeJSON but treats an empty body (io.EOF) as a
+// successful no-op, for endpoints whose request body is optional. This is
+// robust to clients that send no body, an empty body, OR a chunked body with no
+// Content-Length. Only a malformed NON-empty body yields a 400.
+func decodeJSONOptional(w http.ResponseWriter, r *http.Request, dst any) bool {
+	dec := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		if errors.Is(err, io.EOF) {
+			return true // no body → leave dst at its defaults
+		}
+		WriteError(w, http.StatusBadRequest, CodeBadRequest, "invalid JSON body: "+err.Error(), nil)
+		return false
+	}
+	return true
+}
+
 // writeManagerError maps manager sentinel errors to HTTP responses.
 // Returns true if it handled the error.
 func writeManagerError(w http.ResponseWriter, err error) bool {

@@ -14,6 +14,10 @@ const (
 	TypeConfigDeleted    EventType = "config.deleted"
 	TypeLogLine          EventType = "log.line"
 	TypeAlert            EventType = "alert"
+	// TypeBinaryUpdate carries cloudflared binary auto-update progress.
+	// A single event type whose Data.Phase distinguishes the step, so the
+	// UI can subscribe to one channel and render the whole pipeline.
+	TypeBinaryUpdate EventType = "binary.update"
 )
 
 // Event is a single message published on the bus. Data is the type-
@@ -57,4 +61,18 @@ type ProxyConnectionsData struct {
 // LogLineData is the payload for TypeLogLine.
 type LogLineData struct {
 	Line string `json:"line"`
+}
+
+// BinaryUpdateData is the payload for TypeBinaryUpdate. Phase names the
+// pipeline step: checking | up_to_date | available | downloading |
+// downloaded | applying | restarting | done | rolled_back | error.
+// The optional fields carry context relevant to that phase only.
+type BinaryUpdateData struct {
+	Phase      string `json:"phase"`
+	Version    string `json:"version,omitempty"`     // the target/installed version
+	From       string `json:"from,omitempty"`        // previous active version (apply/rollback)
+	To         string `json:"to,omitempty"`          // new active version (apply)
+	InstanceID string `json:"instance_id,omitempty"` // during restarting/rolled_back
+	Message    string `json:"message,omitempty"`
+	Error      string `json:"error,omitempty"`
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/mia-clark/cloudflared-manager/internal/appcfg"
 	"github.com/mia-clark/cloudflared-manager/internal/cfaccount"
 	"github.com/mia-clark/cloudflared-manager/internal/cfdbin"
+	"github.com/mia-clark/cloudflared-manager/internal/cfdupdate"
 	"github.com/mia-clark/cloudflared-manager/internal/manager"
 	"github.com/mia-clark/cloudflared-manager/internal/metrics"
 	"github.com/mia-clark/cloudflared-manager/web"
@@ -25,6 +26,7 @@ type Deps struct {
 	Metrics          *metrics.Store     // may be nil if metrics disabled
 	BinaryStore      *cfdbin.Store      // may be nil; binaries endpoints degrade gracefully
 	BinaryDownloader *cfdbin.Downloader // may be nil; binaries endpoints degrade gracefully
+	BinaryUpdater    *cfdupdate.Updater // may be nil; auto-update endpoints degrade gracefully
 	CFAccounts       *cfaccount.Store   // Cloudflare account/binding store (CF integration)
 }
 
@@ -65,6 +67,7 @@ func NewRouter(d Deps) http.Handler {
 	mh := NewMetricsHandler(d.Metrics)
 	upd := NewUpdateHandler(d.Cfg.DataDir, d.Cfg.SelfUpdateEnabled, d.Logger)
 	binaries := NewBinariesHandler(d.BinaryStore, d.BinaryDownloader, d.Cfg.CloudflaredDefaultVersion, d.Logger)
+	autoupd := NewAutoUpdateHandler(d.BinaryUpdater, d.Logger)
 	cf := NewCFHandler(d.CFAccounts, d.Manager, d.Logger)
 
 	// Authenticated subtree.
@@ -137,6 +140,11 @@ func NewRouter(d Deps) http.Handler {
 		r.Get("/api/v1/binaries", binaries.List)
 		r.Get("/api/v1/binaries/available", binaries.Available)
 		r.Post("/api/v1/binaries/install", binaries.Install)
+		// Auto-update settings + manual trigger. Registered BEFORE the
+		// {version} routes so "auto-update" is never captured as a version.
+		r.Get("/api/v1/binaries/auto-update", autoupd.Get)
+		r.Put("/api/v1/binaries/auto-update", autoupd.Put)
+		r.Post("/api/v1/binaries/auto-update/run", autoupd.Run)
 		r.Post("/api/v1/binaries/{version}/activate", binaries.Activate)
 		r.Delete("/api/v1/binaries/{version}", binaries.Delete)
 

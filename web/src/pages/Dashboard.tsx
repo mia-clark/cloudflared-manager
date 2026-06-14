@@ -48,6 +48,7 @@ const TYPE_BADGE: Record<EventType, { color: string; label: string }> = {
   'config.deleted': { color: 'volcano', label: '配置删除' },
   'log.line': { color: 'default', label: '日志' },
   alert: { color: 'magenta', label: '告警' },
+  'binary.update': { color: 'blue', label: '二进制更新' },
 };
 
 function fmtBytes(n?: number): string {

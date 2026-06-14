@@ -67,6 +67,7 @@
 | `Snapshot`（运行时状态） | **snake_case**（`log_path` / `last_error` / `started_at` / `metrics_port`） | [`manager/instance.go`](../internal/manager/instance.go) |
 | 告警 `AlertRule` / `AlertEvent` | **snake_case**（`inst_id` / `for_seconds` / `rule_id` / `fired_at`） | [`metrics/store_alerts.go`](../internal/metrics/store_alerts.go) |
 | 二进制 `BinaryItem`（List）/ `AvailableRelease` / `VersionMeta`（Install） | **snake_case**（`source_url` / `is_active` / `tag_name` / `published_at` / `downloaded_at`） | [`cfdbin/store.go`](../internal/cfdbin/store.go)、[`cfdbin/download.go`](../internal/cfdbin/download.go) |
+| 二进制自动更新 `AutoUpdateSettings` / `AutoUpdateStatus` | **snake_case**（`interval_hours` / `include_prerelease` / `auto_rollback` / `keep_versions` / `health_grace_seconds` / `last_result` / `active_version`） | [`cfdupdate/settings.go`](../internal/cfdupdate/settings.go)、[`cfdupdate/updater.go`](../internal/cfdupdate/updater.go) |
 | 系统监控 `/system/*` | **snake_case** | [`internal/sysinfo`](../internal/sysinfo/) |
 | WS `Event` 外层信封 | **snake_case**（`config_id`） | [`eventbus/types.go`](../internal/eventbus/types.go) |
 | 历史流量曲线 `points[]` | **snake_case** 外层；点内为 `ts/in/out/conns` | [`internal/api/metrics.go`](../internal/api/metrics.go) |
@@ -113,6 +114,15 @@ cloudflared 没有 per-tunnel 字节计数器，只暴露 Prometheus 指标。`G
 | `CFDM_GITHUB_TOKEN` | （空） | 可选（旧）；Release 代理无需 token |
 | `CFDM_BINARIES_DIR` | `{DATA_DIR}/bin/cloudflared` | cloudflared 二进制存储根目录 |
 | `CFDM_CLOUDFLARED_DEFAULT_VERSION` | `latest` | `POST /binaries/install` 省略 version 时的回退目标 |
+| `CFDM_CFD_AUTOUPDATE_ENABLED` | `true` | 二进制自动更新总开关（仅作首次默认；之后以 `meta.json` UI 设置为准） |
+| `CFDM_CFD_AUTOUPDATE_MODE` | `full` | `full`/`download`/`notify`（首次默认） |
+| `CFDM_CFD_AUTOUPDATE_INTERVAL_HOURS` | `24` | 检查周期小时（首次默认；夹取 1..720） |
+| `CFDM_CFD_AUTOUPDATE_PRERELEASE` | `false` | 是否收预发布版（首次默认） |
+| `CFDM_CFD_AUTOUPDATE_ROLLBACK` | `true` | 失败自动回滚（首次默认） |
+| `CFDM_CFD_AUTOUPDATE_KEEP` | `3` | 保留最近 N 版（首次默认；0=不清理） |
+| `CFDM_CFD_AUTOUPDATE_HEALTH_GRACE` | `8` | 重启后健康观察秒数（首次默认；夹取 1..120） |
+
+> `CFDM_CFD_AUTOUPDATE_*` 仅在 `meta.json` 尚无 `auto_update` 块时作为种子默认；一旦在设置页保存过，即以持久化值为准（UI 覆盖 env）。
 
 ---
 
@@ -560,6 +570,7 @@ cloudflared 没有 per-tunnel 字节计数器，只暴露 Prometheus 指标。`G
 | `instance.state` | `{ state, prev_state? }` | 实例状态变化 |
 | `instance.error` | `{ message }` | 实例错误 |
 | `alert` | （告警负载） | 告警触发 / 解除 |
+| `binary.update` | `{ phase, version?, from?, to?, instance_id?, message?, error? }` | cloudflared 二进制自动更新进度；`phase` ∈ checking/up_to_date/available/downloading/downloaded/applying/restarting/done/rolled_back/error |
 
 ---
 
@@ -682,6 +693,32 @@ version 未安装返回 `404 not_found`；version 非法 `400`。
 
 删除版本目录 → `204`。当前活跃版本不可删，返回 `409 conflict`；未安装返回 `404 not_found`；version 非法 `400`；存储未配置 `503`。
 
+### 11.6 cloudflared 二进制自动更新（snake_case）
+
+让面板**一般不需要人工管理二进制**：启动自举（无二进制则下载激活最新版）、定时检查、下载校验、激活并**滚动重启**跟随活跃版本的运行中实例，失败**自动回滚**。设置存 `meta.json`（UI 覆盖 env 默认）。**显式钉 `binaryVersion` 的实例不会被自动更新移动。**
+
+**`GET /api/v1/binaries/auto-update`** — 返回 `{ settings, status }`。
+
+`settings`（`AutoUpdateSettings`）：
+
+| 字段 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `enabled` | bool | `true` | 总开关；关闭后不定时检查，手动触发仍可用 |
+| `mode` | string | `full` | `full` 全自动（下载+激活+滚动重启）｜`download` 仅下载｜`notify` 仅提示 |
+| `interval_hours` | int | `24` | 检查周期（夹取 1..720） |
+| `include_prerelease` | bool | `false` | 是否收预发布版 |
+| `auto_rollback` | bool | `true` | 新版导致实例起不来时回滚到上一可用版并恢复实例 |
+| `keep_versions` | int | `3` | 保留最近 N 版（0=不清理；活跃/被钉用版本永不删） |
+| `health_grace_seconds` | int | `8` | 重启后健康观察窗口（夹取 1..120） |
+
+`status`（`AutoUpdateStatus`）：`state`(idle/checking/downloading/applying/restarting/rolling_back)、`last_result`(up_to_date/updated/downloaded/notified/failed/rolled_back/`rolled_back_degraded`——回滚后仍有实例未恢复健康)、`last_error?`、`last_check_at?`、`active_version?`、`latest_known?`、`pending_version?`、`in_progress`。
+
+**`PUT /api/v1/binaries/auto-update`** — 部分更新设置（在当前值上覆盖所发字段，即时生效；`DisallowUnknownFields`，多发未知 key 直接 `400`）。返回 `{ settings, status }`。
+
+**`POST /api/v1/binaries/auto-update/run`** — 立即触发，body 全可选 `{ version?, apply?, force? }`：`version` 指定目标版本（省略=最新）；`apply=true` 强制激活+滚动重启（无视 mode，即「更新到最新并应用」）；`force=true` 即使非更新也重装/重激活。`202` 立即返回 `{ status:"running", message }`，进度走 `binary.update` 事件 + 轮询 `status`；已有任务进行中返回 `409`；version 非法 `400`；子系统未就绪 `503`。
+
+> 三个端点在自动更新子系统未就绪时均返回 `503`。事件 `binary.update` 的 `data.phase` 区分阶段（见 §WS 事件）。
+
 ---
 
 ## 12. 端点速查
@@ -739,6 +776,9 @@ version 未安装返回 `404 not_found`；version 非法 `400`。
 | 46 | GET | `/api/v1/binaries` | 是 |
 | 47 | GET | `/api/v1/binaries/available` | 是 |
 | 48 | POST | `/api/v1/binaries/install` | 是 |
+| — | GET | `/api/v1/binaries/auto-update` | 是 |
+| — | PUT | `/api/v1/binaries/auto-update` | 是 |
+| — | POST | `/api/v1/binaries/auto-update/run` | 是 |
 | 49 | POST | `/api/v1/binaries/{version}/activate` | 是 |
 | 50 | DELETE | `/api/v1/binaries/{version}` | 是 |
 
