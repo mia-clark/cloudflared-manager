@@ -27,6 +27,8 @@ import {
   ApiOutlined,
   SettingOutlined,
   KeyOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
 } from '@ant-design/icons';
 import { Link } from 'react-router-dom';
 
@@ -75,6 +77,18 @@ const CFConsole: React.FC = () => {
   const [renameTarget, setRenameTarget] = useState<CFTunnel | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [renaming, setRenaming] = useState(false);
+
+  // 隧道列表缩窄
+  const [listCollapsed, setListCollapsed] = useState<boolean>(
+    () => localStorage.getItem('cfdmgr_cf_tunnel_list_collapsed') === '1'
+  );
+  const toggleListCollapsed = () => {
+    setListCollapsed((v) => {
+      const next = !v;
+      localStorage.setItem('cfdmgr_cf_tunnel_list_collapsed', next ? '1' : '0');
+      return next;
+    });
+  };
 
   const errMsg = (err: unknown): string => {
     const e = err as { response?: { data?: { error?: { message?: string } } }; message?: string };
@@ -252,15 +266,24 @@ const CFConsole: React.FC = () => {
         </Card>
       ) : (
         <Row gutter={16} style={{ minHeight: 560 }}>
-          {/* 左栏：隧道列表 */}
-          <Col xs={24} md={8} style={{ display: 'flex', flexDirection: 'column' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-              <Title level={5} style={{ margin: 0 }}>隧道</Title>
+          {/* 左栏：隧道列表（可一键缩窄） */}
+          <Col xs={24} md={listCollapsed ? 5 : 8} style={{ display: 'flex', flexDirection: 'column', transition: 'all .2s' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 8 }}>
+              <Space size={6}>
+                <Tooltip title={listCollapsed ? '展开列表' : '缩窄列表'}>
+                  <Button type="text" size="small" icon={listCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />} onClick={toggleListCollapsed} />
+                </Tooltip>
+                {!listCollapsed && <Title level={5} style={{ margin: 0 }}>隧道</Title>}
+              </Space>
               <Space>
                 <Button size="small" icon={<ReloadOutlined />} onClick={() => loadTunnels(aid)} loading={tunnelsLoading} />
-                <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => { setNewName(''); setCreateOpen(true); }}>
-                  新建隧道
-                </Button>
+                {listCollapsed ? (
+                  <Tooltip title="新建隧道"><Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => { setNewName(''); setCreateOpen(true); }} /></Tooltip>
+                ) : (
+                  <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => { setNewName(''); setCreateOpen(true); }}>
+                    新建隧道
+                  </Button>
+                )}
               </Space>
             </div>
 
@@ -283,49 +306,60 @@ const CFConsole: React.FC = () => {
                         background: isActive ? token.colorPrimaryBg : token.colorBgContainer,
                         borderRadius: 10,
                       }}
-                      styles={{ body: { padding: 14 } }}
+                      styles={{ body: { padding: listCollapsed ? 10 : 14 } }}
                       onClick={() => setTid(t.id)}
                     >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: 6 }}>
-                        <Text strong style={{ fontSize: 14 }}>{t.name}</Text>
-                        {tunnelStatusTag(t.status)}
-                      </div>
-                      <div style={{ marginBottom: 8 }}>
-                        <Text type="secondary" copyable={{ text: t.id }} style={{ fontSize: 11, fontFamily: 'monospace' }}>
-                          {t.id}
-                        </Text>
-                      </div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <Tag bordered={false} color={t.config_src === 'cloudflare' ? 'blue' : 'default'} style={{ fontSize: 11 }}>
-                          {t.config_src === 'cloudflare' ? '远端配置' : t.config_src || '本地配置'}
-                        </Tag>
-                        <Space size={2}>
-                          <Tooltip title="重命名">
-                            <Button
-                              type="text"
-                              size="small"
-                              icon={<EditOutlined />}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setRenameTarget(t);
-                                setRenameValue(t.name);
-                                setRenameOpen(true);
-                              }}
-                            />
+                      {listCollapsed ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <Tooltip title={`${t.name}（${t.id}）`}>
+                            <Text strong ellipsis style={{ flex: 1, minWidth: 0, fontSize: 13 }}>{t.name}</Text>
                           </Tooltip>
-                          <Popconfirm
-                            title={`删除隧道「${t.name}」？`}
-                            description="将从 Cloudflare 删除该隧道，不可恢复。"
-                            okText="删除"
-                            okButtonProps={{ danger: true }}
-                            cancelText="取消"
-                            onConfirm={() => handleDeleteTunnel(t)}
-                            onPopupClick={(e) => e.stopPropagation()}
-                          >
-                            <Button type="text" size="small" danger icon={<DeleteOutlined />} onClick={(e) => e.stopPropagation()} />
-                          </Popconfirm>
-                        </Space>
-                      </div>
+                          {tunnelStatusTag(t.status)}
+                        </div>
+                      ) : (
+                        <>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: 6 }}>
+                            <Text strong style={{ fontSize: 14 }}>{t.name}</Text>
+                            {tunnelStatusTag(t.status)}
+                          </div>
+                          <div style={{ marginBottom: 8 }}>
+                            <Text type="secondary" copyable={{ text: t.id }} style={{ fontSize: 11, fontFamily: 'monospace' }}>
+                              {t.id}
+                            </Text>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <Tag bordered={false} color={t.config_src === 'cloudflare' ? 'blue' : 'default'} style={{ fontSize: 11 }}>
+                              {t.config_src === 'cloudflare' ? '远端配置' : t.config_src || '本地配置'}
+                            </Tag>
+                            <Space size={2}>
+                              <Tooltip title="重命名">
+                                <Button
+                                  type="text"
+                                  size="small"
+                                  icon={<EditOutlined />}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setRenameTarget(t);
+                                    setRenameValue(t.name);
+                                    setRenameOpen(true);
+                                  }}
+                                />
+                              </Tooltip>
+                              <Popconfirm
+                                title={`删除隧道「${t.name}」？`}
+                                description="将从 Cloudflare 删除该隧道，不可恢复。"
+                                okText="删除"
+                                okButtonProps={{ danger: true }}
+                                cancelText="取消"
+                                onConfirm={() => handleDeleteTunnel(t)}
+                                onPopupClick={(e) => e.stopPropagation()}
+                              >
+                                <Button type="text" size="small" danger icon={<DeleteOutlined />} onClick={(e) => e.stopPropagation()} />
+                              </Popconfirm>
+                            </Space>
+                          </div>
+                        </>
+                      )}
                     </Card>
                   );
                 })
@@ -334,7 +368,7 @@ const CFConsole: React.FC = () => {
           </Col>
 
           {/* 右栏：隧道详情 Tabs */}
-          <Col xs={24} md={16}>
+          <Col xs={24} md={listCollapsed ? 19 : 16} style={{ transition: 'all .2s' }}>
             {activeTunnel ? (
               <Card bordered={false} style={{ borderRadius: 10 }} styles={{ body: { padding: 16 } }}>
                 <div style={{ marginBottom: 12 }}>
