@@ -112,7 +112,10 @@ API 烟测：`BASE=http://127.0.0.1:8080 TOKEN=dev bash scripts/api-smoke.sh`（
 | `CFDM_GITHUB_TOKEN` | （空） | 可选（旧）；Release 代理无需 token |
 | `CFDM_BINARIES_DIR` | `$DATA_DIR/bin/cloudflared` | 二进制存放目录 |
 | `CFDM_CLOUDFLARED_DEFAULT_VERSION` | `latest` | Install 省略 version 时的默认值 |
-| `CFDM_SELF_UPDATE_ENABLED` | `true` | 是否开放 Web 端自更新 |
+| `CFDM_SELF_UPDATE_ENABLED` | `true` | 是否开放 Web 端自更新（守护进程自身） |
+| `CFDM_CFD_AUTOUPDATE_*` | 见下 | cloudflared **二进制**自动更新种子默认（仅 `meta.json` 无 `auto_update` 块时生效，之后以设置页持久化值为准） |
+
+> **二进制自动更新**（`internal/cfdupdate`）：启动自举（无二进制则下载激活最新）+ 定时检查下载激活并**滚动重启**跟随活跃版本的实例，失败**自动回滚**；显式钉 `binaryVersion` 的实例不受影响。env 种子默认：`CFDM_CFD_AUTOUPDATE_ENABLED`(true) / `_MODE`(full|download|notify) / `_INTERVAL_HOURS`(24) / `_PRERELEASE`(false) / `_ROLLBACK`(true) / `_KEEP`(3) / `_HEALTH_GRACE`(8)。运行时改设置走 `PUT /api/v1/binaries/auto-update`（存 `meta.json`）。
 
 安装后配置落在 `/etc/cfdmgrd/cfdmgrd.env`（Linux）；数据目录默认 `/var/lib/cfdmgrd`。
 

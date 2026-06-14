@@ -959,6 +959,72 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest", description: 非法 version tag }
         "502": { $ref: "#/components/responses/Error", description: 安装 / 下载失败 }
 
+  /api/v1/binaries/auto-update:
+    get:
+      tags: [binaries]
+      summary: 读取 cloudflared 二进制自动更新设置与运行状态
+      responses:
+        "200":
+          description: 设置 + 状态
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  settings: { $ref: "#/components/schemas/AutoUpdateSettings" }
+                  status: { $ref: "#/components/schemas/AutoUpdateStatus" }
+        "503": { $ref: "#/components/responses/Error", description: 自动更新子系统未就绪 }
+    put:
+      tags: [binaries]
+      summary: 更新自动更新设置（部分字段，即时生效）
+      description: "在当前设置上覆盖所发字段；未发字段保持不变。DisallowUnknownFields——多发未知 key 直接 400。"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AutoUpdateSettings" }
+      responses:
+        "200":
+          description: 已保存
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  settings: { $ref: "#/components/schemas/AutoUpdateSettings" }
+                  status: { $ref: "#/components/schemas/AutoUpdateStatus" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "503": { $ref: "#/components/responses/Error", description: 自动更新子系统未就绪 }
+
+  /api/v1/binaries/auto-update/run:
+    post:
+      tags: [binaries]
+      summary: 立即触发一次检查 / 下载 / 应用（异步）
+      description: "立即触发更新流水线，202 立即返回；进度走 binary.update 事件 + GET 状态。version 指定目标版本（省略=最新）；apply=true 强制激活+滚动重启（无视 mode）；force=true 即使非更新也重装/重激活。"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                version: { type: string }
+                apply: { type: boolean }
+                force: { type: boolean }
+      responses:
+        "202":
+          description: 已开始
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string }
+                  message: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest", description: 非法 version tag }
+        "409": { $ref: "#/components/responses/Conflict", description: 已有更新任务在进行中 }
+        "503": { $ref: "#/components/responses/Error", description: 自动更新子系统未就绪 }
+
   /api/v1/binaries/{version}/activate:
     parameters:
       - { name: version, in: path, required: true, schema: { type: string } }
@@ -1619,6 +1685,38 @@ components:
         html_url: { type: string }
         asset_url: { type: string }
         sha256: { type: string }
+
+    AutoUpdateSettings:
+      type: object
+      description: cloudflared 二进制自动更新设置（snake_case）。PUT 时可只发部分字段。
+      properties:
+        enabled: { type: boolean, description: 总开关 }
+        mode:
+          type: string
+          enum: [full, download, notify]
+          description: full 全自动（下载+激活+滚动重启）｜download 仅下载｜notify 仅提示
+        interval_hours: { type: integer, description: 检查周期（夹取 1..720） }
+        include_prerelease: { type: boolean, description: 是否收预发布版 }
+        auto_rollback: { type: boolean, description: 新版导致实例起不来时自动回滚 }
+        keep_versions: { type: integer, description: 保留最近 N 版（0=不清理；夹取 0..50） }
+        health_grace_seconds: { type: integer, description: 重启后健康观察窗口秒数（夹取 1..120） }
+
+    AutoUpdateStatus:
+      type: object
+      description: 自动更新引擎运行状态（snake_case）
+      properties:
+        state:
+          type: string
+          description: idle|checking|downloading|applying|restarting|rolling_back
+        last_result:
+          type: string
+          description: up_to_date|updated|downloaded|notified|failed|rolled_back|""
+        last_error: { type: string }
+        last_check_at: { type: string, format: date-time }
+        active_version: { type: string }
+        latest_known: { type: string }
+        pending_version: { type: string, description: download 模式下已下载待应用的版本 }
+        in_progress: { type: boolean }
 
     VersionMeta:
       type: object
