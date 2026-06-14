@@ -174,22 +174,10 @@ func runServe(args []string) int {
 		},
 	})
 
-	// 首次启动自举：store 无任何 active 二进制时，先同步下载激活最新版，
-	// 再让实例自启动（内部按 enabled/已有二进制自动跳过；best-effort，失败仅
-	// 告警，实例可回退 PATH）。
-	bctx, bcancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	if err := autoUpd.BootstrapIfMissing(bctx); err != nil {
-		logger.Warn("cloudflared bootstrap skipped/failed", slog.Any("err", err))
-	}
-	bcancel()
-
-	mgr.AutoStart()
 	defer mgr.Shutdown()
-
-	// 定时自动更新循环：首轮延迟 ~30s 让面板先就绪，之后每 interval 一次。
-	autoUpdCtx, cancelAutoUpd := context.WithCancel(context.Background())
-	defer cancelAutoUpd()
-	go autoUpd.Run(autoUpdCtx)
+	// 注意：二进制启动自举 + 实例自启动 + 定时调度被移到 HTTP 监听启动「之后」
+	// 的后台 goroutine 执行（见下文 startup goroutine）。这样首启即便正在下载
+	// 二进制，/health 与面板也立即可达，不会拖垮容器就绪/存活探针。
 
 	// Cloudflare 账号 + 实例绑定存储（密钥 AES-GCM 落盘）。失败不致命：
 	// 仅 CF 集成端点降级（store 为 nil 时 handler 自身不会被命中——路由仍注册，
@@ -249,8 +237,30 @@ func runServe(args []string) int {
 		}
 	}()
 
+	// 信号在「后台预置」之前注册，使 bootstrap/下载期间收到的 SIGTERM/SIGINT
+	// 也能触发优雅关闭（取消 appCtx → 中断下载与调度），而非被 Go 默认处置硬杀。
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	appCtx, appCancel := context.WithCancel(context.Background())
+	defer appCancel()
+
+	// 后台预置：与 HTTP 监听并行，绝不阻塞 /health。
+	// ① 首启无二进制 → 同步下载激活最新版（内部按 enabled/已有二进制自动跳过；
+	//   best-effort，失败仅告警，实例可回退 PATH），挂在 appCtx 上可被信号中断；
+	// ② 自启动实例（此时二进制已就绪，确保用上新版）；
+	// ③ 进入定时自动更新循环（首轮延迟 ~30s，之后每 interval 一次）。
+	go func() {
+		bctx, bcancel := context.WithTimeout(appCtx, 3*time.Minute)
+		if err := autoUpd.BootstrapIfMissing(bctx); err != nil {
+			logger.Warn("cloudflared bootstrap skipped/failed", slog.Any("err", err))
+		}
+		bcancel()
+		if appCtx.Err() != nil {
+			return // 关停中：不再自启动实例
+		}
+		mgr.AutoStart()
+		autoUpd.Run(appCtx) // 阻塞至 appCtx 取消
+	}()
 
 	select {
 	case sig := <-sigCh:
@@ -259,6 +269,7 @@ func runServe(args []string) int {
 		logger.Error("http server crashed", slog.Any("err", err))
 		return 1
 	}
+	appCancel() // 取消后台预置/调度（中断在途下载、停止定时循环）
 
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownWait)
 	defer cancel()

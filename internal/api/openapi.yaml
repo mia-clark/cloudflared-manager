@@ -1710,7 +1710,7 @@ components:
           description: idle|checking|downloading|applying|restarting|rolling_back
         last_result:
           type: string
-          description: up_to_date|updated|downloaded|notified|failed|rolled_back|""
+          description: up_to_date|updated|downloaded|notified|failed|rolled_back|rolled_back_degraded|""
         last_error: { type: string }
         last_check_at: { type: string, format: date-time }
         active_version: { type: string }

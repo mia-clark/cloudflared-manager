@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -291,9 +292,12 @@ func (u *Updater) TriggerAsync(opts RunOpts) error {
 	if !u.runMu.TryLock() {
 		return ErrBusy
 	}
+	// Set running on THIS goroutine before spawning, so runMu-held always
+	// implies running==true — otherwise Status() could briefly report
+	// in_progress=false for an operation that already rejects triggers with 409.
+	u.running.Store(true)
 	go func() {
 		defer u.runMu.Unlock()
-		u.running.Store(true)
 		defer u.running.Store(false)
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 		defer cancel()
@@ -435,19 +439,36 @@ func (u *Updater) rollingRestart(s Settings, prev, target string) error {
 			u.log.Error("cfdupdate: rollback activate failed", slog.Any("err", err))
 		}
 		// Revert every instance we already moved to target, plus the one that
-		// failed, back onto prev.
+		// failed, back onto prev — and re-probe each so we don't report a clean
+		// recovery while a tunnel is actually down (e.g. prev binary also bad).
 		revert := append(append([]string{}, restarted...), failedID)
+		var degraded []string
 		for _, id := range revert {
 			if id == "" {
 				continue
 			}
 			if err := u.ctl.Reload(id); err != nil {
 				u.log.Warn("cfdupdate: rollback reload failed", slog.String("id", id), slog.Any("err", err))
+				degraded = append(degraded, id)
+				continue
+			}
+			if !u.ctl.WaitHealthy(id, grace) {
+				u.log.Warn("cfdupdate: instance unhealthy after rollback", slog.String("id", id))
+				degraded = append(degraded, id)
 			}
 		}
 		u.mu.Lock()
 		u.status.PendingVersion = ""
 		u.mu.Unlock()
+		if len(degraded) > 0 {
+			// Rollback completed but one or more instances did not recover —
+			// report the degraded state truthfully rather than a clean rollback.
+			err := fmt.Errorf("%w；回滚后以下实例未恢复健康: %v", restartErr, degraded)
+			u.finishErr("idle", "rolled_back_degraded", err)
+			u.publish(eventbus.BinaryUpdateData{Phase: "rolled_back", From: target, To: prev, InstanceID: failedID, Error: err.Error(), Message: "degraded"})
+			u.log.Error("cfdupdate: rollback degraded", slog.Any("instances", degraded))
+			return err
+		}
 		u.finishErr("idle", "rolled_back", restartErr)
 		u.publish(eventbus.BinaryUpdateData{Phase: "rolled_back", From: target, To: prev, InstanceID: failedID, Error: restartErr.Error()})
 		return restartErr
@@ -471,10 +492,17 @@ func (u *Updater) prune(keep int) {
 		u.log.Warn("cfdupdate: retention list failed", slog.Any("err", err))
 		return
 	}
+	// store.List() sorts by STRING, which mis-orders CalVer once the month
+	// segment reaches double digits (e.g. "2026.9.0" > "2026.12.0"
+	// lexicographically). Re-sort numerically here so "keep newest N" is
+	// correct — otherwise retention could prune genuinely-newer binaries.
+	sort.SliceStable(list, func(i, j int) bool {
+		return compareVersions(list[i].Version, list[j].Version) > 0 // newest first
+	})
 	pinned := u.ctl.PinnedBinaryVersions()
 	active := u.store.ActiveVersion()
 	kept := 0
-	for _, v := range list { // store.List() is newest-first
+	for _, v := range list { // now genuinely newest-first (numeric CalVer order)
 		if v.IsActive || v.Version == active {
 			continue
 		}

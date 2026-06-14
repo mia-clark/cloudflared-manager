@@ -90,11 +90,9 @@ func (h *AutoUpdateHandler) Run(w http.ResponseWriter, r *http.Request) {
 		Apply   bool   `json:"apply"`
 		Force   bool   `json:"force"`
 	}
-	// Body is optional; only decode when the client sent one.
-	if r.ContentLength != 0 {
-		if !decodeJSON(w, r, &body) {
-			return
-		}
+	// Body is optional (empty / no Content-Length / chunked all tolerated).
+	if !decodeJSONOptional(w, r, &body) {
+		return
 	}
 	if body.Version != "" && !validVersionParam(body.Version) {
 		WriteError(w, http.StatusBadRequest, CodeBadRequest, "invalid version tag", nil)

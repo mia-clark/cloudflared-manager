@@ -98,9 +98,14 @@ type fakeCtl struct {
 	mu        sync.Mutex
 	followers []string
 	reloadErr map[string]error
-	healthy   map[string]bool // default true when absent
-	pinned    map[string]struct{}
-	reloads   []string
+	// badOn maps an instance id to the version on which it stays unhealthy
+	// (modelling "a bad binary that this instance can't run"). On any other
+	// active version it is healthy — so a rollback to a good version recovers
+	// it. Requires store to read the current active version.
+	store   *fakeStore
+	badOn   map[string]string
+	pinned  map[string]struct{}
+	reloads []string
 }
 
 func (c *fakeCtl) ActiveFollowerRunningIDs() []string { return c.followers }
@@ -118,14 +123,14 @@ func (c *fakeCtl) Reload(id string) error {
 func (c *fakeCtl) WaitHealthy(id string, _ time.Duration) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.healthy == nil {
+	if c.badOn == nil || c.store == nil {
 		return true
 	}
-	v, ok := c.healthy[id]
+	bad, ok := c.badOn[id]
 	if !ok {
 		return true
 	}
-	return v
+	return c.store.ActiveVersion() != bad // unhealthy only while the bad version is active
 }
 
 func (c *fakeCtl) PinnedBinaryVersions() map[string]struct{} {
@@ -205,8 +210,8 @@ func TestCheckAndApply_FullUpdateSuccess(t *testing.T) {
 func TestCheckAndApply_RollbackOnUnhealthy(t *testing.T) {
 	store := newFakeStore("2026.5.1")
 	rel := &fakeRelease{tag: "2026.5.2"}
-	// "b" never becomes healthy on the new binary.
-	ctl := &fakeCtl{followers: []string{"a", "b", "c"}, healthy: map[string]bool{"b": false}}
+	// "b" is unhealthy on the new binary (2026.5.2) but recovers on rollback.
+	ctl := &fakeCtl{followers: []string{"a", "b", "c"}, store: store, badOn: map[string]string{"b": "2026.5.2"}}
 	u := newTestUpdater(t, Settings{Enabled: true, Mode: ModeFull, IntervalHours: 24, AutoRollback: true, HealthGraceSeconds: 1}, store, rel, ctl)
 
 	err := u.CheckAndApply(context.Background(), RunOpts{})
@@ -231,10 +236,32 @@ func TestCheckAndApply_RollbackOnUnhealthy(t *testing.T) {
 	}
 }
 
+func TestCheckAndApply_RollbackDegraded(t *testing.T) {
+	store := newFakeStore("2026.5.1")
+	rel := &fakeRelease{tag: "2026.5.2"}
+	// "b" reload always errors → it cannot come up on the new OR the old
+	// binary, so the rollback completes but b stays down → degraded result
+	// (must NOT report a clean rolled_back).
+	ctl := &fakeCtl{followers: []string{"a", "b", "c"}, store: store,
+		reloadErr: map[string]error{"b": errors.New("spawn failed")}}
+	u := newTestUpdater(t, Settings{Enabled: true, Mode: ModeFull, IntervalHours: 24, AutoRollback: true, HealthGraceSeconds: 1}, store, rel, ctl)
+
+	err := u.CheckAndApply(context.Background(), RunOpts{})
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if store.ActiveVersion() != "2026.5.1" {
+		t.Errorf("active=%q want rollback to 2026.5.1", store.ActiveVersion())
+	}
+	if got := u.Status().LastResult; got != "rolled_back_degraded" {
+		t.Errorf("last_result=%q want rolled_back_degraded", got)
+	}
+}
+
 func TestCheckAndApply_NoRollbackBestEffort(t *testing.T) {
 	store := newFakeStore("2026.5.1")
 	rel := &fakeRelease{tag: "2026.5.2"}
-	ctl := &fakeCtl{followers: []string{"a", "b", "c"}, healthy: map[string]bool{"b": false}}
+	ctl := &fakeCtl{followers: []string{"a", "b", "c"}, store: store, badOn: map[string]string{"b": "2026.5.2"}}
 	// auto_rollback OFF → keep going past the failure, stay on new version.
 	u := newTestUpdater(t, Settings{Enabled: true, Mode: ModeFull, IntervalHours: 24, AutoRollback: false, HealthGraceSeconds: 1}, store, rel, ctl)
 
@@ -374,6 +401,38 @@ func TestRetention_PrunesOldKeepsActiveAndPinned(t *testing.T) {
 	}
 	if deleted["2026.5.2"] || deleted["2026.5.1"] || deleted["2026.4.4"] {
 		t.Errorf("active/kept versions must survive, deleteLog=%v", store.deleteLog)
+	}
+}
+
+// TestRetention_CalVerNumericOrder guards the fix for the string-vs-numeric
+// ordering bug: once the CalVer month reaches double digits, "2026.9.0" sorts
+// AFTER "2026.12.0" lexicographically, so a string-ordered prune would delete
+// the genuinely-newest versions. prune must re-sort numerically.
+func TestRetention_CalVerNumericOrder(t *testing.T) {
+	// Installed (besides what we add): months spanning the single→double digit
+	// boundary. fakeStore.List() sorts by STRING (like the real store), so this
+	// reproduces the bug condition; prune must correct it.
+	store := newFakeStore("2026.11.0", "2026.10.0", "2026.9.0", "2026.8.0")
+	rel := &fakeRelease{tag: "2026.12.0"}
+	ctl := &fakeCtl{followers: []string{}}
+	u := newTestUpdater(t, Settings{Enabled: true, Mode: ModeFull, IntervalHours: 24, AutoRollback: true, KeepVersions: 2, HealthGraceSeconds: 1}, store, rel, ctl)
+
+	if err := u.CheckAndApply(context.Background(), RunOpts{}); err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	// active=2026.12.0. Non-active numeric newest-first: 11, 10, 9, 8.
+	// keep=2 → keep 11 & 10, delete 9 & 8.
+	deleted := map[string]bool{}
+	for _, d := range store.deleteLog {
+		deleted[d] = true
+	}
+	if !deleted["2026.9.0"] || !deleted["2026.8.0"] {
+		t.Errorf("expected 2026.9.0 & 2026.8.0 pruned (oldest), deleteLog=%v", store.deleteLog)
+	}
+	for _, keep := range []string{"2026.12.0", "2026.11.0", "2026.10.0"} {
+		if deleted[keep] {
+			t.Errorf("%s must NOT be pruned (it is among the newest), deleteLog=%v", keep, store.deleteLog)
+		}
 	}
 }
 

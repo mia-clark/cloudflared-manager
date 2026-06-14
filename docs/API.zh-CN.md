@@ -711,7 +711,7 @@ version 未安装返回 `404 not_found`；version 非法 `400`。
 | `keep_versions` | int | `3` | 保留最近 N 版（0=不清理；活跃/被钉用版本永不删） |
 | `health_grace_seconds` | int | `8` | 重启后健康观察窗口（夹取 1..120） |
 
-`status`（`AutoUpdateStatus`）：`state`(idle/checking/downloading/applying/restarting/rolling_back)、`last_result`(up_to_date/updated/downloaded/notified/failed/rolled_back)、`last_error?`、`last_check_at?`、`active_version?`、`latest_known?`、`pending_version?`、`in_progress`。
+`status`（`AutoUpdateStatus`）：`state`(idle/checking/downloading/applying/restarting/rolling_back)、`last_result`(up_to_date/updated/downloaded/notified/failed/rolled_back/`rolled_back_degraded`——回滚后仍有实例未恢复健康)、`last_error?`、`last_check_at?`、`active_version?`、`latest_known?`、`pending_version?`、`in_progress`。
 
 **`PUT /api/v1/binaries/auto-update`** — 部分更新设置（在当前值上覆盖所发字段，即时生效；`DisallowUnknownFields`，多发未知 key 直接 `400`）。返回 `{ settings, status }`。
 

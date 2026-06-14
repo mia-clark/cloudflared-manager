@@ -50,6 +50,7 @@ const RESULT_META: Record<string, { label: string; color: string }> = {
   notified: { label: '发现新版', color: 'blue' },
   failed: { label: '更新失败', color: 'error' },
   rolled_back: { label: '已回滚', color: 'warning' },
+  rolled_back_degraded: { label: '已回滚（部分实例未恢复）', color: 'error' },
 };
 
 function StateTag({ status }: { status: AutoUpdateStatus }) {
