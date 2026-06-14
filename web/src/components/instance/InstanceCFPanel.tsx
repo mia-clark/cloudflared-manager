@@ -452,6 +452,7 @@ export default function InstanceCFPanel({ id }: Props) {
 
       <PublicHostnameModal
         open={phModalOpen}
+        aid={binding.account_id || ''}
         title={phEditing ? '编辑公共主机名' : '添加公共主机名'}
         initial={phEditing ? publicHostnameToForm(phEditing) : undefined}
         onCancel={() => {

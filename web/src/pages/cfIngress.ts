@@ -302,11 +302,37 @@ export async function deleteProxyCNAME(aid: string, hostname: string): Promise<v
 // service 拆成 serviceType + serviceTarget，originRequest 各字段打平（access_* 前缀）。
 
 export interface PublicHostnameFormValues extends OriginRequestFormValues {
-  hostname: string;
+  // hostname 现由「子域前缀 subdomain + 域名 zoneName」拼成（仿 Cloudflare 官方后台），
+  // 提交时合成；回填时按账号 zone 列表拆分。hostname 保留为合成结果（可选）。
+  hostname?: string;
+  subdomain?: string;
+  zoneName?: string;
   path?: string;
   serviceType: ServiceType;
   serviceTarget?: string;
   manage_dns?: boolean;
+}
+
+// 子域前缀 + 域名 → 完整主机名。subdomain 留空 = 直接用根域名（apex）。
+export function buildHostname(subdomain?: string, zoneName?: string): string {
+  const sub = (subdomain || '').trim().replace(/^\.+|\.+$/g, '');
+  const zone = (zoneName || '').trim().replace(/^\.+|\.+$/g, '');
+  if (!zone) return sub; // 未选域名时退回 sub（校验会拦住空 zone）
+  return sub ? `${sub}.${zone}` : zone;
+}
+
+// 完整主机名 → { 子域前缀, 域名 }：按账号 zone 列表做最长后缀匹配。匹配不到时把
+// 整个 hostname 当作 zoneName 兜底（保证编辑回填不丢值，且 Select 会注入该项）。
+export function splitHostname(hostname: string, zones: CFZone[]): { subdomain: string; zoneName: string } {
+  const raw = (hostname || '').trim();
+  if (raw === '') return { subdomain: '', zoneName: '' };
+  const h = raw.toLowerCase();
+  const zone = pickZone(h, zones);
+  if (!zone) return { subdomain: '', zoneName: raw };
+  const zn = (zone.name || '').toLowerCase();
+  if (h === zn) return { subdomain: '', zoneName: zone.name };
+  if (h.endsWith('.' + zn)) return { subdomain: raw.slice(0, raw.length - zn.length - 1), zoneName: zone.name };
+  return { subdomain: '', zoneName: zone.name };
 }
 
 // 实例级聚合 API（addPublicHostname/updatePublicHostname）的请求体。
@@ -321,7 +347,7 @@ export interface PublicHostnamePayload {
 // 表单值 → 实例级聚合 API 请求体。
 export function formToPayload(v: PublicHostnameFormValues): PublicHostnamePayload {
   const payload: PublicHostnamePayload = {
-    hostname: (v.hostname || '').trim(),
+    hostname: buildHostname(v.subdomain, v.zoneName) || (v.hostname || '').trim(),
     service: buildService(v.serviceType, v.serviceTarget || ''),
     manage_dns: !!v.manage_dns,
   };
@@ -334,7 +360,7 @@ export function formToPayload(v: PublicHostnameFormValues): PublicHostnamePayloa
 // 表单值 → ingress 规则（CFConsole 直改远端隧道配置用）。
 export function formToIngressRule(v: PublicHostnameFormValues): CFIngressRule {
   const rule: CFIngressRule = {
-    hostname: (v.hostname || '').trim(),
+    hostname: buildHostname(v.subdomain, v.zoneName) || (v.hostname || '').trim(),
     service: buildService(v.serviceType, v.serviceTarget || ''),
   };
   if (v.path && v.path.trim() !== '') rule.path = v.path.trim();
